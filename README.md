@@ -1,0 +1,2 @@
+# codingame-puzzles
+CodinGame Puzzles
