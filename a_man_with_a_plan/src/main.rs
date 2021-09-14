@@ -61,7 +61,18 @@ impl PointOfInterest {
     }
 }
 
-type Coordinates = [u8; 2];
+#[derive(Debug, Copy, Clone, PartialEq)]
+enum PlayerGoalStatus {
+    Roaming,
+    ObjectiveCompleted,
+    RewardCollected,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct Coordinates {
+    x: usize,
+    y: usize,
+}
 
 #[derive(Debug, Copy, Clone)]
 struct MapCell {
@@ -94,99 +105,103 @@ enum Mount {
 
 #[derive(Debug)]
 struct Player {
+    location: PointOfInterest,
     weapon: Weapon,
     mount: Mount,
     objective: PointOfInterest,
-    has_completed_objective: bool,
-    has_finished_the_game: bool,
+    goal_status: PlayerGoalStatus,
 }
 
-impl Player {
-    fn clone(&self) -> Player {
-        return Player {
-            weapon: self.weapon,
-            mount: self.mount,
-            objective: self.objective,
-            has_completed_objective: self.has_completed_objective,
-            has_finished_the_game: self.has_finished_the_game,
-        };
+fn clone_player(player: &Player) -> Player {
+    return Player {
+        location: player.location,
+        weapon: player.weapon,
+        mount: player.mount,
+        objective: player.objective,
+        goal_status: player.goal_status,
+    };
+}
+
+fn is_player_interested_moving_to_point_of_interest(
+    next_point_of_interest: PointOfInterest,
+    player: &Player,
+    game_map: &GameMap,
+) -> bool {
+    if player.location == next_point_of_interest {
+        return false;
     }
 
-    fn can_do(&self, point_of_interest: &PointOfInterest) -> bool {
-        return match point_of_interest {
-            PointOfInterest::House => false,
-            PointOfInterest::Castle => {
-                self.has_finished_the_game == false && self.has_completed_objective == true
-            }
-            PointOfInterest::Princess => {
-                self.has_finished_the_game == false && self.has_completed_objective == false
-            }
-            PointOfInterest::Blacksmith => {
-                self.has_finished_the_game == false && self.weapon == Weapon::None
-            }
-            _ => false,
-        };
-    }
+    return match next_point_of_interest {
+        PointOfInterest::House => false,
+        PointOfInterest::Castle => {
+            return player.goal_status == PlayerGoalStatus::ObjectiveCompleted;
+        }
+        PointOfInterest::Princess => {
+            return player.objective == PointOfInterest::Princess
+                && player.goal_status == PlayerGoalStatus::Roaming;
+        }
+        /*
+        PointOfInterest::Blacksmith => {
+            return player.goal_status != PlayerGoalStatus::ObjectiveCompleted
+                && player.weapon == Weapon::None
+        }
+        */
+        _ => false,
+    };
+}
 
-    fn apply_point_of_interest_effect(&mut self, point_of_interest: &PointOfInterest) {
-        match point_of_interest {
-            PointOfInterest::Castle => self.has_finished_the_game = true,
-            PointOfInterest::Princess => {
-                if self.objective == PointOfInterest::Princess {
-                    self.has_completed_objective = true
-                }
+fn apply_point_of_interest_effect_on_player(
+    player: &mut Player,
+    point_of_interest: PointOfInterest,
+) {
+    player.location = point_of_interest;
+    match point_of_interest {
+        PointOfInterest::Castle => {
+            player.goal_status = PlayerGoalStatus::RewardCollected;
+        }
+        PointOfInterest::Princess => {
+            if player.objective != PointOfInterest::Princess {
+                return;
             }
-            PointOfInterest::Blacksmith => self.weapon = Weapon::Sword,
-            PointOfInterest::Stable => self.mount = Mount::Horse,
-            _ => (),
-        };
-    }
-
-    fn apply_terrain_effect(&mut self, terrain: &Terrain) {
-        match terrain {
-            Terrain::Water => self.weapon = Weapon::None,
-            _ => (),
-        };
-    }
+            player.goal_status = PlayerGoalStatus::ObjectiveCompleted;
+        }
+        PointOfInterest::Blacksmith => player.weapon = Weapon::Sword,
+        PointOfInterest::Stable => player.mount = Mount::Horse,
+        _ => (),
+    };
 }
 
 #[derive(Debug)]
-struct PlayerMovesTreeNode {
+struct PlayerGoalPathTreeNode {
     player: Player,
-    point_of_interest: PointOfInterest,
-    children: Vec<PlayerMovesTreeNode>,
+    children: Vec<PlayerGoalPathTreeNode>,
 }
 
-impl PlayerMovesTreeNode {
-    fn new(
-        player: &Player,
-        point_of_interest: &PointOfInterest,
-        available_point_of_interests: &Vec<PointOfInterest>,
-    ) -> PlayerMovesTreeNode {
-        let cloned_player = player.clone();
-        let mut children: Vec<PlayerMovesTreeNode> = vec![];
+impl PlayerGoalPathTreeNode {
+    fn new(player: &Player, game_map: &GameMap) -> PlayerGoalPathTreeNode {
+        let mut children: Vec<PlayerGoalPathTreeNode> = vec![];
 
-        for chosen_point_of_interest in available_point_of_interests {
-            let mut cloned_player = player.clone();
-            if cloned_player.can_do(chosen_point_of_interest) {
-                let mut cloned_point_of_interests = available_point_of_interests.clone();
-                let index = available_point_of_interests
-                    .iter()
-                    .position(|&r| r == *chosen_point_of_interest)
-                    .unwrap();
-                cloned_point_of_interests.remove(index);
-                cloned_player.apply_point_of_interest_effect(chosen_point_of_interest);
-                children.push(PlayerMovesTreeNode::new(
-                    &cloned_player,
-                    &chosen_point_of_interest,
-                    &cloned_point_of_interests,
-                ))
+        if player.goal_status != PlayerGoalStatus::RewardCollected {
+            for next_point_of_interest in game_map.point_of_interest_map.keys() {
+                if is_player_interested_moving_to_point_of_interest(
+                    *next_point_of_interest,
+                    &player,
+                    &game_map,
+                ) == false
+                {
+                    continue;
+                }
+                let mut cloned_player = clone_player(player);
+                apply_point_of_interest_effect_on_player(
+                    &mut cloned_player,
+                    *next_point_of_interest,
+                );
+                children.push(PlayerGoalPathTreeNode::new(&cloned_player, &game_map));
             }
         }
 
-        return PlayerMovesTreeNode {
-            player: cloned_player,
-            point_of_interest: *point_of_interest,
+        return PlayerGoalPathTreeNode {
+            player: clone_player(player),
             children,
         };
     }
@@ -203,11 +218,11 @@ fn main() {
     //##################### READ GAME INPUT - END
 
     let mut player = Player {
+        location: PointOfInterest::House,
         weapon: Weapon::None,
         mount: Mount::None,
         objective: PointOfInterest::None,
-        has_completed_objective: false,
-        has_finished_the_game: false,
+        goal_status: PlayerGoalStatus::Roaming,
     };
 
     let mut map_matrix = vec![
@@ -243,18 +258,14 @@ fn main() {
         let mut input_line = String::new();
         io::stdin().read_line(&mut input_line).unwrap();
         let game_inputs = input_line.split(" ").collect::<Vec<_>>();
-        let point_of_interest = game_inputs[0].trim().to_string();
-        let x = parse_input!(game_inputs[1], u8);
-        let y = parse_input!(game_inputs[2], u8);
-        point_of_interest_map.insert(
-            PointOfInterest::convert_str_to_enum(&point_of_interest).unwrap(),
-            [y, x],
-        );
+        let point_of_interest_as_str = game_inputs[0].trim().to_string();
+        let x = parse_input!(game_inputs[1], usize);
+        let y = parse_input!(game_inputs[2], usize);
+        let point_of_interest =
+            PointOfInterest::convert_str_to_enum(&point_of_interest_as_str).unwrap();
+        point_of_interest_map.insert(point_of_interest, Coordinates { x, y });
     }
     //##################### READ GAME INPUT - END
-
-    let available_point_of_interests: Vec<PointOfInterest> =
-        point_of_interest_map.keys().cloned().collect();
 
     let game_map = GameMap {
         width: map_width,
@@ -263,11 +274,7 @@ fn main() {
         point_of_interest_map,
     };
 
-    let root_node = PlayerMovesTreeNode::new(
-        &player,
-        &PointOfInterest::House,
-        &available_point_of_interests,
-    );
+    let root_node = PlayerGoalPathTreeNode::new(&player, &game_map);
 
     println!("{:?}", root_node);
 }
