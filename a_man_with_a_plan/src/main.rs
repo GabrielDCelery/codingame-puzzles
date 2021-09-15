@@ -7,7 +7,7 @@ macro_rules! parse_input {
     };
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 enum Terrain {
     None,
     Grassland,
@@ -122,10 +122,22 @@ fn clone_player(player: &Player) -> Player {
     };
 }
 
+fn can_player_move_to_terrain(player: &Player, terrain: Terrain) -> bool {
+    if terrain == Terrain::Ravine {
+        return false;
+    }
+    if player.weapon == Weapon::Sword && terrain == Terrain::Water {
+        return false;
+    }
+    if player.mount == Mount::Horse && terrain == Terrain::Mountain {
+        return false;
+    }
+    return true;
+}
+
 fn is_player_interested_moving_to_point_of_interest(
     next_point_of_interest: PointOfInterest,
     player: &Player,
-    game_map: &GameMap,
 ) -> bool {
     if player.location == next_point_of_interest {
         return false;
@@ -182,19 +194,16 @@ impl PlayerGoalPathTreeNode {
         let mut children: Vec<PlayerGoalPathTreeNode> = vec![];
 
         if player.goal_status != PlayerGoalStatus::RewardCollected {
-            for next_point_of_interest in game_map.point_of_interest_map.keys() {
-                if is_player_interested_moving_to_point_of_interest(
-                    *next_point_of_interest,
-                    &player,
-                    &game_map,
-                ) == false
+            for &next_point_of_interest in game_map.point_of_interest_map.keys() {
+                if is_player_interested_moving_to_point_of_interest(next_point_of_interest, &player)
+                    == false
                 {
                     continue;
                 }
                 let mut cloned_player = clone_player(player);
                 apply_point_of_interest_effect_on_player(
                     &mut cloned_player,
-                    *next_point_of_interest,
+                    next_point_of_interest,
                 );
                 children.push(PlayerGoalPathTreeNode::new(&cloned_player, &game_map));
             }
@@ -204,6 +213,51 @@ impl PlayerGoalPathTreeNode {
             player: clone_player(player),
             children,
         };
+    }
+}
+
+#[derive(Debug)]
+struct AStar<'p, 'gm> {
+    player: &'p Player,
+    game_map: &'gm GameMap,
+}
+
+impl<'p, 'gm> AStar<'p, 'gm> {
+    fn new(player: &'p Player, game_map: &'gm GameMap) -> AStar<'p, 'gm> {
+        return AStar { player, game_map };
+    }
+
+    fn get_valid_neighbours(&self, coordinates: &Coordinates) -> Vec<Coordinates> {
+        let mut neighbours: Vec<Coordinates> = vec![];
+        for diff_x in 0..3 {
+            for diff_y in 0..3 {
+                if coordinates.x == 0 && diff_x == 0 || coordinates.y == 0 && diff_y == 0 {
+                    continue;
+                }
+
+                let c_x = coordinates.x + diff_x - 1;
+                let c_y = coordinates.y + diff_y - 1;
+
+                if (coordinates.x == c_x && coordinates.y == c_y)
+                    || (c_x >= self.game_map.width)
+                    || (c_y >= self.game_map.height)
+                {
+                    continue;
+                }
+
+                if !can_player_move_to_terrain(
+                    self.player,
+                    self.game_map.map_matrix[c_y][c_x].terrain,
+                ) {
+                    continue;
+                }
+
+                let neighbour_coordinates = Coordinates { x: c_x, y: c_y };
+
+                neighbours.push(neighbour_coordinates);
+            }
+        }
+        return neighbours;
     }
 }
 
@@ -276,5 +330,10 @@ fn main() {
 
     let root_node = PlayerGoalPathTreeNode::new(&player, &game_map);
 
-    println!("{:?}", root_node);
+    let astar = AStar::new(&player, &game_map);
+
+    println!(
+        "{:?}",
+        astar.get_valid_neighbours(&Coordinates { x: 1, y: 0 })
+    );
 }
