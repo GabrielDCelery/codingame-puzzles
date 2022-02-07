@@ -216,6 +216,11 @@ impl PlayerGoalPathTreeNode {
     }
 }
 
+#[derive(Debug, Clone)]
+struct AStarNode {
+    f: usize,
+}
+
 #[derive(Debug)]
 struct AStar<'p, 'gm> {
     player: &'p Player,
@@ -223,12 +228,19 @@ struct AStar<'p, 'gm> {
 }
 
 impl<'p, 'gm> AStar<'p, 'gm> {
-    fn new(player: &'p Player, game_map: &'gm GameMap) -> AStar<'p, 'gm> {
-        return AStar { player, game_map };
+    fn search(&self, start: Coordinates, end: Coordinates) {
+        let search_matrix: Vec<Vec<AStarNode>> =
+            vec![vec![AStarNode { f: usize::MAX }; self.game_map.width]; self.game_map.height];
+        let mut open_list: Vec<AStarNode> = vec![];
+        let mut closed_list: Vec<AStarNode> = vec![];
+
+        open_list.push(AStarNode {});
+
+        while open_list.len() > 0 {}
     }
 
     fn get_valid_neighbours(&self, coordinates: &Coordinates) -> Vec<Coordinates> {
-        let mut neighbours: Vec<Coordinates> = vec![];
+        let mut neighbours: Vec<Coordinates> = Vec::with_capacity(8);
         for diff_x in 0..3 {
             for diff_y in 0..3 {
                 if coordinates.x == 0 && diff_x == 0 || coordinates.y == 0 && diff_y == 0 {
@@ -330,7 +342,10 @@ fn main() {
 
     let root_node = PlayerGoalPathTreeNode::new(&player, &game_map);
 
-    let astar = AStar::new(&player, &game_map);
+    let astar = AStar {
+        player: &player,
+        game_map: &game_map,
+    };
 
     println!(
         "{:?}",
