@@ -94,7 +94,7 @@ fn build_min_max_tree(
             }
 
             for student_index in 0..NUM_OF_STUDENTS {
-                let student = node.game_state[students_offset + i];
+                let student = node.game_state[students_offset + student_index];
                 let student_after_move = apply_move(student, card_move);
                 if student_after_move != 0 {
                     let mut cloned_game_state = node.game_state.clone();
