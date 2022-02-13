@@ -191,28 +191,28 @@ while (true) {
 
   for (let i = 0; i < 5; i++) {
     const board: string = readline();
-    const cells = board.split('');
+    const cells = board.split("");
     cells.forEach((cell, k) => {
       let cell_index = 32 - (i * 7 + k);
       switch (cell) {
-        case 'w': {
+        case "w": {
           let index = WHITE_PLAYER_OFFSET + STUDENTS_OFFSET + w_student_index;
           game_state[index] = Math.pow(2, cell_index);
           w_student_index += 1;
           break;
         }
-        case 'W': {
+        case "W": {
           let index = WHITE_PLAYER_OFFSET + WIZARD_OFFSET;
           game_state[index] = Math.pow(2, cell_index);
           break;
         }
-        case 'b': {
+        case "b": {
           let index = BLACK_PLAYER_OFFSET + STUDENTS_OFFSET + b_student_index;
           game_state[index] = Math.pow(2, cell_index);
           b_student_index += 1;
           break;
         }
-        case 'B': {
+        case "B": {
           let index = BLACK_PLAYER_OFFSET + WIZARD_OFFSET;
           game_state[index] = Math.pow(2, cell_index);
           break;
@@ -227,7 +227,7 @@ while (true) {
   let w_card_index = 0;
 
   for (let i = 0; i < 5; i++) {
-    var inputs: string[] = readline().split(' ');
+    var inputs: string[] = readline().split(" ");
     const owner: number = parseInt(inputs[0]);
     const cardId: number = parseInt(inputs[1]);
     const dx1: number = parseInt(inputs[2]);
@@ -274,7 +274,7 @@ while (true) {
 
   const actionCount: number = parseInt(readline());
   for (let i = 0; i < actionCount; i++) {
-    var inputs: string[] = readline().split(' ');
+    var inputs: string[] = readline().split(" ");
     const cardId: number = parseInt(inputs[0]);
     const move: string = inputs[1];
   }
@@ -294,5 +294,5 @@ while (true) {
   // Write an action using console.log()
   // To debug: console.error('Debug messages...');
 
-  console.log('1 A1B2 moving the student');
+  console.log("1 A1B2 moving the student");
 }
