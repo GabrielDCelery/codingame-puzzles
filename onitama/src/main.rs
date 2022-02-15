@@ -158,6 +158,8 @@ impl MinMaxNode {
                     self.child_nodes.push(child_node);
                 }
 
+                /*
+
                 let mut cloned_game_state = self.game_state.clone();
 
                 apply_player_passing_to_game_state(
@@ -183,8 +185,61 @@ impl MinMaxNode {
                 child_node.build(&card_moves_map, &board_configs, MIN_MAX_TREE_DEPTH);
 
                 self.child_nodes.push(child_node);
+                */
             }
         }
+    }
+
+    fn score_min_max_tree(
+        &mut self,
+        depth: usize,
+        alpha: i32,
+        beta: i32,
+        is_min_maxing_player: bool,
+    ) -> i32 {
+        if depth == 0 || is_game_finished(&self.game_state) {
+            let score = get_game_score_for_maximizing_player(&self.game_state, self.root_player_id);
+            self.score = score;
+            return score;
+        }
+        if is_min_maxing_player {
+            let mut max_eval = -100000000;
+            let mut max_alpha = alpha;
+            for child_node in &self.child_nodes {
+                let node_eval = score_min_max_tree(&child_node, depth - 1, alpha, beta, false);
+                max_eval = cmp::max(max_eval, node_eval);
+                max_alpha = cmp::max(max_alpha, node_eval);
+                if beta <= max_alpha {
+                    break;
+                }
+            }
+            self.score = max_eval;
+            return max_eval;
+        }
+        let mut min_eval = 100000000;
+        let mut min_beta = beta;
+        for child_node in &self.child_nodes {
+            let node_eval = score_min_max_tree(&child_node, depth - 1, alpha, min_beta, true);
+            min_eval = cmp::min(min_eval, node_eval);
+            min_beta = cmp::min(min_beta, node_eval);
+            if min_beta <= alpha {
+                break;
+            }
+        }
+        self.score = min_eval;
+        return min_eval;
+    }
+
+    fn get_next_command(&self) -> String {
+        let mut max_score = -10000;
+        let mut next_command = "".to_string();
+        for child_node in &self.child_nodes {
+            if child_node.score >= max_score {
+                max_score = child_node.score;
+                next_command = child_node.command.clone();
+            }
+        }
+        return next_command;
     }
 }
 
@@ -430,7 +485,7 @@ fn get_game_state_score(game_state: &GameState) -> i32 {
         3 => 6,
         2 => 4,
         1 => 2,
-        0 => 6,
+        0 => 0,
         -1 => -1,
         -2 => -2,
         -3 => -3,
@@ -522,10 +577,11 @@ fn score_min_max_tree(
     is_min_maxing_player: bool,
 ) -> i32 {
     if depth == 0 || is_game_finished(&min_max_node.game_state) {
-        return get_game_score_for_maximizing_player(
+        let score = get_game_score_for_maximizing_player(
             &min_max_node.game_state,
             min_max_node.root_player_id,
         );
+        return score;
     }
     if is_min_maxing_player {
         let mut max_eval = -100000000;
@@ -747,16 +803,10 @@ fn main() {
         }
 
         let mut root_node = MinMaxNode::new(0, player_id, player_id, 0, "".to_string(), game_state);
-
         root_node.build(&card_moves_map, &board_configs, MIN_MAX_TREE_DEPTH);
-        let score = score_min_max_tree(&root_node, MIN_MAX_TREE_DEPTH, -100000000, 100000000, true);
-
-        println!("{:?}", score);
-
-        // Write an action using println!("message...");
-        // To debug: eprintln!("Debug message...");
-
-        println!("1 A1B2 moving the student");
+        root_node.score_min_max_tree(MIN_MAX_TREE_DEPTH, -100000000, 100000000, true);
+        let command = root_node.get_next_command();
+        println!("{}", command);
     }
 }
 /*
