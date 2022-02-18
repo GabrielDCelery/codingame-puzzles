@@ -8,7 +8,7 @@ macro_rules! parse_input {
     };
 }
 
-static MIN_MAX_TREE_DEPTH: usize = 4;
+static MIN_MAX_TREE_DEPTH: usize = 3;
 
 static WHITE_PLAYER_SHRINE_MASK: i32 = 0b00000_00000_00000_00000_00100;
 static BLACK_PLAYER_SHRINE_MASK: i32 = 0b00100_00000_00000_00000_00000;
@@ -94,9 +94,16 @@ impl MinMaxNode {
         }
 
         for piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
-            if !does_player_piece_exist(&self.game_state, self.current_player_id, piece_index) {
-                return;
+            let piece_position = self.game_state.player_states[self.current_player_id][piece_index];
+            if piece_position == 0 {
+                continue;
             }
+            let piece_position_on_baord_before_move = get_piece_position_on_baord(
+                &self.game_state,
+                &board_configs,
+                self.current_player_id,
+                piece_index,
+            );
             for card_index in 0..NUM_OF_CARDS_PER_PLAYER {
                 for card_move_index in 0..NUM_OF_MOVES_PER_CARD {
                     if !is_player_move_valid(
@@ -110,12 +117,6 @@ impl MinMaxNode {
                     ) {
                         continue;
                     }
-                    let piece_position_on_baord_before_move = get_piece_position_on_baord(
-                        &self.game_state,
-                        &board_configs,
-                        self.current_player_id,
-                        piece_index,
-                    );
 
                     let mut cloned_game_state = self.game_state.clone();
 
@@ -453,17 +454,17 @@ fn get_game_score_for_maximizing_player(
 fn get_game_state_score(game_state: &GameState) -> i32 {
     let white_wizard_position = game_state.player_states[WHITE_PLAYER_ID][WIZARD_INDEX];
     if white_wizard_position == 0 {
-        return -10;
+        return -100;
     }
     if (white_wizard_position & BLACK_PLAYER_SHRINE_MASK) > 0 {
-        return 10;
+        return 100;
     }
     let black_wizard_position = game_state.player_states[BLACK_PLAYER_ID][WIZARD_INDEX];
     if black_wizard_position == 0 {
-        return 10;
+        return 100;
     }
     if (black_wizard_position & WHITE_PLAYER_SHRINE_MASK) > 0 {
-        return -10;
+        return -100;
     }
     let mut num_of_white_pieces = 0;
     for piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
@@ -481,15 +482,15 @@ fn get_game_state_score(game_state: &GameState) -> i32 {
     }
     let white_piece_advantage = num_of_white_pieces - num_of_black_pieces;
     return match white_piece_advantage {
-        4 => 8,
-        3 => 6,
-        2 => 4,
-        1 => 2,
+        4 => 80,
+        3 => 60,
+        2 => 40,
+        1 => 20,
         0 => 0,
-        -1 => -1,
-        -2 => -2,
-        -3 => -3,
-        -4 => -4,
+        -1 => -10,
+        -2 => -20,
+        -3 => -30,
+        -4 => -40,
         _ => 0,
     };
 }
@@ -697,7 +698,7 @@ fn main() {
 
     let mut input_line = String::new();
     io::stdin().read_line(&mut input_line).unwrap();
-    let player_id = parse_input!(input_line, usize);
+    let root_player_id = parse_input!(input_line, usize);
 
     // game loop
     loop {
@@ -802,7 +803,14 @@ fn main() {
             let _move = inputs[1].trim().to_string();
         }
 
-        let mut root_node = MinMaxNode::new(0, player_id, player_id, 0, "".to_string(), game_state);
+        let mut root_node = MinMaxNode::new(
+            0,
+            root_player_id,
+            root_player_id,
+            0,
+            "".to_string(),
+            game_state,
+        );
         root_node.build(&card_moves_map, &board_configs, MIN_MAX_TREE_DEPTH);
         root_node.score_min_max_tree(MIN_MAX_TREE_DEPTH, -100000000, 100000000, true);
         let command = root_node.get_next_command();
