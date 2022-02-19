@@ -8,8 +8,6 @@ macro_rules! parse_input {
     };
 }
 
-static MIN_MAX_TREE_DEPTH: usize = 4;
-
 static WHITE_PLAYER_SHRINE_MASK: i32 = 0b00000_00000_00000_00000_00100;
 static BLACK_PLAYER_SHRINE_MASK: i32 = 0b00100_00000_00000_00000_00000;
 
@@ -23,6 +21,8 @@ static NUM_OF_CARDS_PER_PLAYER: usize = 2;
 static NUM_OF_MOVES_PER_CARD: usize = 4;
 static DEFAULT_CARD_ROTATION: i32 = 1;
 static PLAYER_PIECES_POSITION_BITMAP_OFFSET: usize = 9;
+
+static MIN_MAX_TREE_DEPTH_CONFIG: [usize; 10] = [6, 6, 6, 5, 5, 4, 4, 4, 4, 4];
 
 static VALID_MOVES_FROM_POSITION_MASKS: [[i32; 2]; 25] = [
     [1, 0b00000_00000_00111_00111_00111],
@@ -163,6 +163,18 @@ impl GameState {
             || ((white_wizard_position & BLACK_PLAYER_SHRINE_MASK) > 0)
             || (black_wizard_position == 0)
             || ((black_wizard_position & WHITE_PLAYER_SHRINE_MASK) > 0);
+    }
+
+    fn get_num_of_pieces(&self) -> usize {
+        let mut num_of_pieces = 0;
+        for player_id in 0..2 {
+            for player_piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
+                if self.players[player_id][player_piece_index] > 0 {
+                    num_of_pieces += 1
+                }
+            }
+        }
+        return num_of_pieces;
     }
 }
 
@@ -306,7 +318,7 @@ impl MinMaxNode {
                         cloned_game_state,
                     );
 
-                    child_node.build(&pre_calculated, MIN_MAX_TREE_DEPTH);
+                    child_node.build(&pre_calculated, target_depth);
 
                     self.child_nodes.push(child_node);
                 }
@@ -355,7 +367,7 @@ impl MinMaxNode {
     }
 
     fn get_next_command(&self) -> String {
-        let mut max_score = -10000;
+        let mut max_score = -100000000;
         let mut next_command = "".to_string();
         for child_node in &self.child_nodes {
             if child_node.score >= max_score {
@@ -633,7 +645,8 @@ fn main() {
         }
 
         game_state.re_clculate_player_pieces_bitmap();
-
+        let num_of_pieces = game_state.get_num_of_pieces();
+        eprintln!("{}", num_of_pieces);
         let mut root_node = MinMaxNode::new(
             0,
             root_player_id,
@@ -642,8 +655,9 @@ fn main() {
             "".to_string(),
             game_state,
         );
-        root_node.build(&pre_calculated, MIN_MAX_TREE_DEPTH);
-        root_node.score_min_max_tree(MIN_MAX_TREE_DEPTH, -100000000, 100000000, true);
+        let target_depth = MIN_MAX_TREE_DEPTH_CONFIG[num_of_pieces - 1];
+        root_node.build(&pre_calculated, target_depth);
+        root_node.score_min_max_tree(target_depth, -100000000, 100000000, true);
         let command = root_node.get_next_command();
         println!("{}", command);
     }
