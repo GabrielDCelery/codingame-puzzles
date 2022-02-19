@@ -11,10 +11,12 @@ macro_rules! parse_input {
 static WHITE_PLAYER_SHRINE_MASK: i32 = 0b00000_00000_00000_00000_00100;
 static BLACK_PLAYER_SHRINE_MASK: i32 = 0b00100_00000_00000_00000_00000;
 
-static WIZARD_INDEX: usize = 0;
+static CONTROLS_CENTER: i32 = 0b00000_01110_01110_01110_00000;
+
+static WIZARD_INDEX: usize = 4;
 static WHITE_PLAYER_ID: usize = 0;
 static BLACK_PLAYER_ID: usize = 1;
-static STUDENTS_OFFSET: usize = 1;
+static STUDENTS_OFFSET: usize = 0;
 static CARDS_OFFSET: usize = 5;
 static NUM_OF_PIECES_PER_PLAYER: usize = 5;
 static NUM_OF_CARDS_PER_PLAYER: usize = 2;
@@ -165,7 +167,7 @@ impl GameState {
             || ((black_wizard_position & WHITE_PLAYER_SHRINE_MASK) > 0);
     }
 
-    fn get_num_of_pieces(&self) -> usize {
+    fn get_num_of_total_pieces(&self) -> usize {
         let mut num_of_pieces = 0;
         for player_id in 0..2 {
             for player_piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
@@ -175,6 +177,17 @@ impl GameState {
             }
         }
         return num_of_pieces;
+    }
+
+    fn get_num_of_player_pieces(&self, player_id: usize) -> i32 {
+        let mut num_of_player_pieces = 0;
+        for piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
+            let piece_position = self.players[player_id][piece_index];
+            if piece_position > 0 {
+                num_of_player_pieces += 1;
+            }
+        }
+        return num_of_player_pieces;
     }
 }
 
@@ -370,7 +383,7 @@ impl MinMaxNode {
         let mut max_score = -100000000;
         let mut next_command = "".to_string();
         for child_node in &self.child_nodes {
-            if child_node.score >= max_score {
+            if child_node.score > max_score {
                 max_score = child_node.score;
                 next_command = child_node.command.clone();
             }
@@ -414,34 +427,30 @@ fn get_game_score_for_maximizing_player(
 fn get_game_state_score(game_state: &GameState) -> i32 {
     let white_wizard_position = game_state.players[WHITE_PLAYER_ID][WIZARD_INDEX];
     if white_wizard_position == 0 {
-        return -100;
+        return -1000;
     }
     if (white_wizard_position & BLACK_PLAYER_SHRINE_MASK) > 0 {
-        return 100;
+        return 1000;
     }
     let black_wizard_position = game_state.players[BLACK_PLAYER_ID][WIZARD_INDEX];
     if black_wizard_position == 0 {
-        return 100;
+        return 1000;
     }
     if (black_wizard_position & WHITE_PLAYER_SHRINE_MASK) > 0 {
-        return -100;
+        return -1000;
     }
-    let mut num_of_white_pieces = 0;
-    for piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
-        let piece_position = game_state.players[WHITE_PLAYER_ID][piece_index];
-        if piece_position > 0 {
-            num_of_white_pieces += 1;
-        }
-    }
-    let mut num_of_black_pieces = 0;
-    for piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
-        let piece_position = game_state.players[BLACK_PLAYER_ID][piece_index];
-        if piece_position > 0 {
-            num_of_black_pieces += 1;
-        }
-    }
-    let white_piece_advantage = num_of_white_pieces - num_of_black_pieces;
-    return white_piece_advantage * 20;
+    let num_of_white_pieces = game_state.get_num_of_player_pieces(WHITE_PLAYER_ID);
+    let num_of_black_pieces = game_state.get_num_of_player_pieces(BLACK_PLAYER_ID);
+    let white_player_pieces_bitmap =
+        game_state.players[WHITE_PLAYER_ID][PLAYER_PIECES_POSITION_BITMAP_OFFSET];
+    let num_of_white_pieces_in_center =
+        (white_player_pieces_bitmap & CONTROLS_CENTER).count_ones() as i32;
+    let black_player_pieces_bitmap =
+        game_state.players[BLACK_PLAYER_ID][PLAYER_PIECES_POSITION_BITMAP_OFFSET];
+    let num_of_black_pieces_in_center =
+        (black_player_pieces_bitmap & CONTROLS_CENTER).count_ones() as i32;
+    return num_of_white_pieces * 20 - num_of_black_pieces * 20 + num_of_white_pieces_in_center * 5
+        - num_of_black_pieces_in_center * 5;
 }
 
 fn main() {
@@ -645,8 +654,7 @@ fn main() {
         }
 
         game_state.re_clculate_player_pieces_bitmap();
-        let num_of_pieces = game_state.get_num_of_pieces();
-        eprintln!("{}", num_of_pieces);
+        let num_of_pieces = game_state.get_num_of_total_pieces();
         let mut root_node = MinMaxNode::new(
             0,
             root_player_id,
@@ -655,6 +663,8 @@ fn main() {
             "".to_string(),
             game_state,
         );
+        let i: i32 = 5;
+        eprintln!("{}", i.count_ones());
         let target_depth = MIN_MAX_TREE_DEPTH_CONFIG[num_of_pieces - 1];
         root_node.build(&pre_calculated, target_depth);
         root_node.score_min_max_tree(target_depth, -100000000, 100000000, true);
