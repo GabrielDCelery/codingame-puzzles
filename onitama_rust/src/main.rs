@@ -11,13 +11,13 @@ macro_rules! parse_input {
 static WHITE_PLAYER_SHRINE_MASK: i32 = 0b00000_00000_00000_00000_00100;
 static BLACK_PLAYER_SHRINE_MASK: i32 = 0b00100_00000_00000_00000_00000;
 
-static WHITE_EARLY_GAME_TARGET: i32 = 0b00000_00000_11111_11111_00000;
-static WHITE_MID_GAME_TARGET: i32 = 0b00000_01110_01110_00000_00000;
-static WHITE_END_GAME_TARGET: i32 = 0b01110_01110_00000_0000_00000;
+static WHITE_EARLY_GAME_TARGET: i32 = 0b00000_00000_01110_01110_01110;
+static WHITE_MID_GAME_TARGET: i32 = 0b00000_01110_01110_01110_00000;
+static WHITE_END_GAME_TARGET: i32 = 0b01110_01110_01110_00000_00000;
 
-static BLACK_EARLY_GAME_TARGET: i32 = 0b00000_11111_11111_00000_00000;
-static BLACK_MID_GAME_TARGET: i32 = 0b00000_01110_01110_00000_00000;
-static BLACK_END_GAME_TARGET: i32 = 0b00000_00000_00000_01110_01110;
+static BLACK_EARLY_GAME_TARGET: i32 = 0b01110_01110_01110_00000_00000;
+static BLACK_MID_GAME_TARGET: i32 = 0b00000_01110_01110_01110_00000;
+static BLACK_END_GAME_TARGET: i32 = 0b00000_00000_01110_01110_01110;
 
 static GAME_TARGETS: [[i32; 3]; 2] = [
     [
@@ -314,14 +314,14 @@ impl MinMaxNode {
                         .get(&piece_position_before_move)
                         .unwrap()
                         .get(&card_id)
-                        .unwrap()
+                        .unwrap();
                 } else {
                     piece_positions_after_move = pre_calculated
                         .positions_after_rotated_card_move_map
                         .get(&piece_position_before_move)
                         .unwrap()
                         .get(&card_id)
-                        .unwrap()
+                        .unwrap();
                 }
 
                 for piece_position_after_move_ in piece_positions_after_move.iter() {
