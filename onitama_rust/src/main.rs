@@ -11,7 +11,26 @@ macro_rules! parse_input {
 static WHITE_PLAYER_SHRINE_MASK: i32 = 0b00000_00000_00000_00000_00100;
 static BLACK_PLAYER_SHRINE_MASK: i32 = 0b00100_00000_00000_00000_00000;
 
-static CONTROLS_CENTER: i32 = 0b00000_01110_01110_01110_00000;
+static WHITE_EARLY_GAME_TARGET: i32 = 0b00000_00000_11111_11111_00000;
+static WHITE_MID_GAME_TARGET: i32 = 0b00000_01110_01110_00000_00000;
+static WHITE_END_GAME_TARGET: i32 = 0b01110_01110_00000_0000_00000;
+
+static BLACK_EARLY_GAME_TARGET: i32 = 0b00000_11111_11111_00000_00000;
+static BLACK_MID_GAME_TARGET: i32 = 0b00000_01110_01110_00000_00000;
+static BLACK_END_GAME_TARGET: i32 = 0b00000_00000_00000_01110_01110;
+
+static GAME_TARGETS: [[i32; 3]; 2] = [
+    [
+        WHITE_EARLY_GAME_TARGET,
+        WHITE_MID_GAME_TARGET,
+        WHITE_END_GAME_TARGET,
+    ],
+    [
+        BLACK_EARLY_GAME_TARGET,
+        BLACK_MID_GAME_TARGET,
+        BLACK_END_GAME_TARGET,
+    ],
+];
 
 static WIZARD_INDEX: usize = 4;
 static WHITE_PLAYER_ID: usize = 0;
@@ -23,8 +42,6 @@ static NUM_OF_CARDS_PER_PLAYER: usize = 2;
 static NUM_OF_MOVES_PER_CARD: usize = 4;
 static DEFAULT_CARD_ROTATION: i32 = 1;
 static PLAYER_PIECES_POSITION_BITMAP_OFFSET: usize = 9;
-
-static MIN_MAX_TREE_DEPTH_CONFIG: [usize; 10] = [6, 6, 6, 5, 5, 4, 4, 4, 4, 4];
 
 static VALID_MOVES_FROM_POSITION_MASKS: [[i32; 2]; 25] = [
     [1, 0b00000_00000_00111_00111_00111],
@@ -167,18 +184,6 @@ impl GameState {
             || ((black_wizard_position & WHITE_PLAYER_SHRINE_MASK) > 0);
     }
 
-    fn get_num_of_total_pieces(&self) -> usize {
-        let mut num_of_pieces = 0;
-        for player_id in 0..2 {
-            for player_piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
-                if self.players[player_id][player_piece_index] > 0 {
-                    num_of_pieces += 1
-                }
-            }
-        }
-        return num_of_pieces;
-    }
-
     fn get_num_of_player_pieces(&self, player_id: usize) -> i32 {
         let mut num_of_player_pieces = 0;
         for piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
@@ -188,6 +193,69 @@ impl GameState {
             }
         }
         return num_of_player_pieces;
+    }
+
+    fn get_game_score_for_maximizing_player(&self, maximizing_player_id: usize) -> i32 {
+        let score = self.get_game_state_score();
+        if maximizing_player_id == WHITE_PLAYER_ID {
+            return score;
+        }
+        return -1 * score;
+    }
+
+    fn get_game_state_score(&self) -> i32 {
+        let white_wizard_position = self.players[WHITE_PLAYER_ID][WIZARD_INDEX];
+        if white_wizard_position == 0 {
+            return -100000;
+        }
+        if (white_wizard_position & BLACK_PLAYER_SHRINE_MASK) > 0 {
+            return 100000;
+        }
+        let black_wizard_position = self.players[BLACK_PLAYER_ID][WIZARD_INDEX];
+        if black_wizard_position == 0 {
+            return 100000;
+        }
+        if (black_wizard_position & WHITE_PLAYER_SHRINE_MASK) > 0 {
+            return -100000;
+        }
+        let num_of_white_pieces = self.get_num_of_player_pieces(WHITE_PLAYER_ID);
+        let num_of_black_pieces = self.get_num_of_player_pieces(BLACK_PLAYER_ID);
+
+        let points_from_num_of_pieces = num_of_white_pieces * 100 - num_of_black_pieces * 100;
+
+        let num_of_total_pieces = num_of_white_pieces + num_of_black_pieces;
+
+        let game_target_index = match num_of_total_pieces {
+            10 => 0,
+            9 => 0,
+            8 => 1,
+            7 => 1,
+            6 => 1,
+            5 => 1,
+            4 => 2,
+            3 => 2,
+            2 => 2,
+            1 => 2,
+            0 => 2,
+            _ => 0,
+        };
+        let white_player_target_mask = GAME_TARGETS[WHITE_PLAYER_ID][game_target_index];
+        let black_player_target_mask = GAME_TARGETS[BLACK_PLAYER_ID][game_target_index];
+
+        let white_player_pieces_bitmap =
+            self.players[WHITE_PLAYER_ID][PLAYER_PIECES_POSITION_BITMAP_OFFSET];
+        let black_player_pieces_bitmap =
+            self.players[BLACK_PLAYER_ID][PLAYER_PIECES_POSITION_BITMAP_OFFSET];
+
+        let num_of_white_pieces_matching_mask =
+            (white_player_pieces_bitmap & white_player_target_mask).count_ones() as i32;
+        let num_of_black_pieces_matching_mask =
+            (black_player_pieces_bitmap & black_player_target_mask).count_ones() as i32;
+
+        let points_from_pieces_in_preferred_position =
+            num_of_white_pieces_matching_mask * 10 - num_of_black_pieces_matching_mask * 10;
+
+        return points_from_num_of_pieces + points_from_pieces_in_preferred_position;
     }
 }
 
@@ -338,24 +406,25 @@ impl MinMaxNode {
             }
         }
     }
-
     fn score_min_max_tree(
         &mut self,
         depth: usize,
         alpha: i32,
         beta: i32,
-        is_min_maxing_player: bool,
+        is_maximizing_player: bool,
     ) -> i32 {
         if depth == 0 || self.game_state.is_game_finished() {
-            let score = get_game_score_for_maximizing_player(&self.game_state, self.root_player_id);
+            let score = self
+                .game_state
+                .get_game_score_for_maximizing_player(self.root_player_id);
             self.score = score;
             return score;
         }
-        if is_min_maxing_player {
+        if is_maximizing_player {
             let mut max_eval = -100000000;
             let mut max_alpha = alpha;
             for child_node in self.child_nodes.iter_mut() {
-                let node_eval = child_node.score_min_max_tree(depth - 1, alpha, beta, false);
+                let node_eval = child_node.score_min_max_tree(depth - 1, max_alpha, beta, false);
                 max_eval = cmp::max(max_eval, node_eval);
                 max_alpha = cmp::max(max_alpha, node_eval);
                 if beta <= max_alpha {
@@ -378,8 +447,7 @@ impl MinMaxNode {
         self.score = min_eval;
         return min_eval;
     }
-
-    fn get_next_command(&self) -> String {
+    fn get_next_command(&self) -> (String, i32) {
         let mut max_score = -100000000;
         let mut next_command = "".to_string();
         for child_node in &self.child_nodes {
@@ -388,7 +456,7 @@ impl MinMaxNode {
                 next_command = child_node.command.clone();
             }
         }
-        return next_command;
+        return (next_command, max_score);
     }
 }
 
@@ -413,44 +481,51 @@ fn get_opponent_id(player_id: usize) -> usize {
     return WHITE_PLAYER_ID;
 }
 
-fn get_game_score_for_maximizing_player(
+fn get_num_of_estimated_moves_for_player(
     game_state: &GameState,
-    maximizing_player_id: usize,
-) -> i32 {
-    let score = get_game_state_score(&game_state);
-    if maximizing_player_id == WHITE_PLAYER_ID {
-        return score;
-    }
-    return -1 * score;
-}
+    pre_calculated: &PreCalculated,
+    player_id: usize,
+) -> usize {
+    let mut num_of_possible_moves = 0;
+    for piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
+        let piece_position_before_move = game_state.players[player_id][piece_index];
+        if piece_position_before_move == 0 {
+            continue;
+        }
+        for card_index in 0..NUM_OF_CARDS_PER_PLAYER {
+            let (card_id, card_rotation) = game_state.get_player_card(player_id, card_index);
 
-fn get_game_state_score(game_state: &GameState) -> i32 {
-    let white_wizard_position = game_state.players[WHITE_PLAYER_ID][WIZARD_INDEX];
-    if white_wizard_position == 0 {
-        return -1000;
+            let piece_positions_after_move;
+
+            if card_rotation == 1 {
+                piece_positions_after_move = pre_calculated
+                    .positions_after_card_move_map
+                    .get(&piece_position_before_move)
+                    .unwrap()
+                    .get(&card_id)
+                    .unwrap()
+            } else {
+                piece_positions_after_move = pre_calculated
+                    .positions_after_rotated_card_move_map
+                    .get(&piece_position_before_move)
+                    .unwrap()
+                    .get(&card_id)
+                    .unwrap()
+            }
+
+            for piece_position_after_move_ in piece_positions_after_move.iter() {
+                let piece_position_after_move = *piece_position_after_move_;
+                let own_pieces_bitmap =
+                    game_state.players[player_id][PLAYER_PIECES_POSITION_BITMAP_OFFSET];
+                let is_moving_on_own_piece = (piece_position_after_move & own_pieces_bitmap) > 0;
+                if is_moving_on_own_piece {
+                    continue;
+                }
+                num_of_possible_moves += 1;
+            }
+        }
     }
-    if (white_wizard_position & BLACK_PLAYER_SHRINE_MASK) > 0 {
-        return 1000;
-    }
-    let black_wizard_position = game_state.players[BLACK_PLAYER_ID][WIZARD_INDEX];
-    if black_wizard_position == 0 {
-        return 1000;
-    }
-    if (black_wizard_position & WHITE_PLAYER_SHRINE_MASK) > 0 {
-        return -1000;
-    }
-    let num_of_white_pieces = game_state.get_num_of_player_pieces(WHITE_PLAYER_ID);
-    let num_of_black_pieces = game_state.get_num_of_player_pieces(BLACK_PLAYER_ID);
-    let white_player_pieces_bitmap =
-        game_state.players[WHITE_PLAYER_ID][PLAYER_PIECES_POSITION_BITMAP_OFFSET];
-    let num_of_white_pieces_in_center =
-        (white_player_pieces_bitmap & CONTROLS_CENTER).count_ones() as i32;
-    let black_player_pieces_bitmap =
-        game_state.players[BLACK_PLAYER_ID][PLAYER_PIECES_POSITION_BITMAP_OFFSET];
-    let num_of_black_pieces_in_center =
-        (black_player_pieces_bitmap & CONTROLS_CENTER).count_ones() as i32;
-    return num_of_white_pieces * 20 - num_of_black_pieces * 20 + num_of_white_pieces_in_center * 5
-        - num_of_black_pieces_in_center * 5;
+    return num_of_possible_moves;
 }
 
 fn main() {
@@ -654,7 +729,13 @@ fn main() {
         }
 
         game_state.re_clculate_player_pieces_bitmap();
-        let num_of_pieces = game_state.get_num_of_total_pieces();
+        let num_of_possible_moves_for_white =
+            get_num_of_estimated_moves_for_player(&game_state, &pre_calculated, WHITE_PLAYER_ID);
+        let num_of_possible_moves_for_black =
+            get_num_of_estimated_moves_for_player(&game_state, &pre_calculated, BLACK_PLAYER_ID);
+        let num_of_possible_moves_in_total =
+            num_of_possible_moves_for_white + num_of_possible_moves_for_black;
+
         let mut root_node = MinMaxNode::new(
             0,
             root_player_id,
@@ -663,12 +744,32 @@ fn main() {
             "".to_string(),
             game_state,
         );
-        let i: i32 = 5;
-        eprintln!("{}", i.count_ones());
-        let target_depth = MIN_MAX_TREE_DEPTH_CONFIG[num_of_pieces - 1];
+
+        let mut target_depth: usize = 0;
+        if num_of_possible_moves_in_total >= 39 {
+            target_depth = 3;
+        }
+        if num_of_possible_moves_in_total >= 19 && num_of_possible_moves_in_total < 39 {
+            target_depth = 4;
+        }
+        if num_of_possible_moves_in_total >= 11 && num_of_possible_moves_in_total < 19 {
+            target_depth = 5;
+        }
+        if num_of_possible_moves_in_total < 11 {
+            target_depth = 6;
+        }
+
         root_node.build(&pre_calculated, target_depth);
         root_node.score_min_max_tree(target_depth, -100000000, 100000000, true);
-        let command = root_node.get_next_command();
-        println!("{}", command);
+        let (command, score) = root_node.get_next_command();
+
+        println!(
+            "{} s: {} d: {} wm: {} bm: {}",
+            command,
+            score,
+            target_depth,
+            num_of_possible_moves_for_white,
+            num_of_possible_moves_for_black
+        );
     }
 }
