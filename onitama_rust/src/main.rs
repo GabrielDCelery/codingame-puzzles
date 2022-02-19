@@ -8,10 +8,7 @@ macro_rules! parse_input {
     };
 }
 
-static MIN_MAX_TREE_DEPTH: usize = 3;
-
-static WHITE_PLAYER_STARTING_PIECES: i32 = 0b00000_00000_00000_00000_11111;
-static BLACK_PLAYER_STARTING_PIECES: i32 = 0b11111_00000_00000_00000_00000;
+static MIN_MAX_TREE_DEPTH: usize = 4;
 
 static WHITE_PLAYER_SHRINE_MASK: i32 = 0b00000_00000_00000_00000_00100;
 static BLACK_PLAYER_SHRINE_MASK: i32 = 0b00100_00000_00000_00000_00000;
@@ -25,6 +22,7 @@ static NUM_OF_PIECES_PER_PLAYER: usize = 5;
 static NUM_OF_CARDS_PER_PLAYER: usize = 2;
 static NUM_OF_MOVES_PER_CARD: usize = 4;
 static DEFAULT_CARD_ROTATION: i32 = 1;
+static PLAYER_PIECES_POSITION_BITMAP_OFFSET: usize = 9;
 
 static VALID_MOVES_FROM_POSITION_MASKS: [[i32; 2]; 25] = [
     [1, 0b00000_00000_00111_00111_00111],
@@ -86,27 +84,85 @@ type CardMoves = [i32; 4];
 
 type CardMovesMap = HashMap<i32, CardMoves>;
 
-type PlayerState = [i32; 9];
+type PlayerState = [i32; 10];
 
 #[derive(Debug)]
 struct PreCalculated {
-    valid_moves_from_position_masks: HashMap<i32, i32>,
     board_bit_values_to_cells: HashMap<i32, String>,
-    is_move_valid_from_position_with_card: HashMap<i32, HashMap<i32, [bool; 4]>>,
+    positions_after_card_move_map: HashMap<i32, HashMap<i32, Vec<i32>>>,
+    positions_after_rotated_card_move_map: HashMap<i32, HashMap<i32, Vec<i32>>>,
 }
 
 #[derive(Debug)]
 struct GameState {
-    player_states: [PlayerState; 2],
+    players: [PlayerState; 2],
     middle_card: [i32; 2],
 }
 
 impl GameState {
     fn clone(&self) -> GameState {
         return GameState {
-            player_states: [self.player_states[0].clone(), self.player_states[1].clone()],
+            players: [self.players[0].clone(), self.players[1].clone()],
             middle_card: self.middle_card.clone(),
         };
+    }
+
+    fn get_player_card(&self, player_id: usize, card_index: usize) -> (i32, i32) {
+        let player_card_index = CARDS_OFFSET + card_index * 2;
+        return (
+            self.players[player_id][player_card_index],
+            self.players[player_id][player_card_index + 1],
+        );
+    }
+
+    fn get_middle_card(&self) -> (i32, i32) {
+        return (self.middle_card[0], self.middle_card[1]);
+    }
+
+    fn set_player_piece_position(
+        &mut self,
+        player_id: usize,
+        piece_index: usize,
+        piece_position: i32,
+    ) {
+        self.players[player_id][piece_index] = piece_position;
+    }
+
+    fn set_player_card(
+        &mut self,
+        player_id: usize,
+        card_index: usize,
+        card_id: i32,
+        card_rotation: i32,
+    ) {
+        let player_card_index = CARDS_OFFSET + card_index * 2;
+        self.players[player_id][player_card_index] = card_id;
+        self.players[player_id][player_card_index + 1] = card_rotation;
+    }
+
+    fn set_middle_card(&mut self, card_id: i32, card_rotation: i32) {
+        self.middle_card[0] = card_id;
+        self.middle_card[1] = card_rotation;
+    }
+
+    fn re_clculate_player_pieces_bitmap(&mut self) {
+        for player_id in 0..2 {
+            let mut player_pieces_bitmap = 0;
+            for player_piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
+                player_pieces_bitmap =
+                    player_pieces_bitmap | self.players[player_id][player_piece_index]
+            }
+            self.players[player_id][PLAYER_PIECES_POSITION_BITMAP_OFFSET] = player_pieces_bitmap;
+        }
+    }
+
+    fn is_game_finished(&self) -> bool {
+        let white_wizard_position = self.players[WHITE_PLAYER_ID][WIZARD_INDEX];
+        let black_wizard_position = self.players[BLACK_PLAYER_ID][WIZARD_INDEX];
+        return (white_wizard_position == 0)
+            || ((white_wizard_position & BLACK_PLAYER_SHRINE_MASK) > 0)
+            || (black_wizard_position == 0)
+            || ((black_wizard_position & WHITE_PLAYER_SHRINE_MASK) > 0);
     }
 }
 
@@ -141,65 +197,105 @@ impl MinMaxNode {
         };
     }
 
-    fn build(
-        &mut self,
-        card_moves_map: &CardMovesMap,
-        pre_calculated: &PreCalculated,
-        target_depth: usize,
-    ) {
-        if self.depth == target_depth || is_game_finished(&self.game_state) {
+    fn build(&mut self, pre_calculated: &PreCalculated, target_depth: usize) {
+        if self.depth == target_depth || self.game_state.is_game_finished() {
             return;
         }
+        let (middle_card_id, middle_card_rotation) = self.game_state.get_middle_card();
         for piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
-            let piece_position = self.game_state.player_states[self.current_player_id][piece_index];
-            if piece_position == 0 {
+            let piece_position_before_move =
+                self.game_state.players[self.current_player_id][piece_index];
+            if piece_position_before_move == 0 {
                 continue;
             }
             for card_index in 0..NUM_OF_CARDS_PER_PLAYER {
-                for card_move_index in 0..NUM_OF_MOVES_PER_CARD {
-                    if !is_player_move_valid(
-                        &self.game_state,
-                        &card_moves_map,
-                        &pre_calculated,
-                        self.current_player_id,
-                        piece_index,
-                        card_index,
-                        card_move_index,
-                    ) {
+                let (card_id, card_rotation) = self
+                    .game_state
+                    .get_player_card(self.current_player_id, card_index);
+
+                let piece_positions_after_move;
+
+                if card_rotation == 1 {
+                    piece_positions_after_move = pre_calculated
+                        .positions_after_card_move_map
+                        .get(&piece_position_before_move)
+                        .unwrap()
+                        .get(&card_id)
+                        .unwrap()
+                } else {
+                    piece_positions_after_move = pre_calculated
+                        .positions_after_rotated_card_move_map
+                        .get(&piece_position_before_move)
+                        .unwrap()
+                        .get(&card_id)
+                        .unwrap()
+                }
+
+                for piece_position_after_move_ in piece_positions_after_move.iter() {
+                    let piece_position_after_move = *piece_position_after_move_;
+                    let own_pieces_bitmap = self.game_state.players[self.current_player_id]
+                        [PLAYER_PIECES_POSITION_BITMAP_OFFSET];
+                    let is_moving_on_own_piece =
+                        (piece_position_after_move & own_pieces_bitmap) > 0;
+                    if is_moving_on_own_piece {
                         continue;
                     }
 
                     let mut cloned_game_state = self.game_state.clone();
 
-                    apply_player_moving_piece_to_game_state(
-                        &mut cloned_game_state,
-                        &card_moves_map,
-                        &pre_calculated,
+                    cloned_game_state.set_player_piece_position(
                         self.current_player_id,
                         piece_index,
-                        card_index,
-                        card_move_index,
+                        piece_position_after_move,
                     );
 
-                    let (card_id, card_rotation) =
-                        get_player_card(&self.game_state, self.current_player_id, card_index);
+                    cloned_game_state.set_player_card(
+                        self.current_player_id,
+                        card_index,
+                        middle_card_id,
+                        middle_card_rotation,
+                    );
+                    cloned_game_state.set_middle_card(card_id, -1 * card_rotation);
+                    let opponent_id = get_opponent_id(self.current_player_id);
+                    let opponent_pieces_bitmap =
+                        self.game_state.players[opponent_id][PLAYER_PIECES_POSITION_BITMAP_OFFSET];
 
-                    let piece_position_on_baord_before_move = pre_calculated
+                    let is_capturing_opponent_piece =
+                        (piece_position_after_move & opponent_pieces_bitmap) > 0;
+                    if is_capturing_opponent_piece {
+                        for opponent_piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
+                            let opponent_piece_position =
+                                self.game_state.players[opponent_id][opponent_piece_index];
+                            if opponent_piece_position == 0 {
+                                continue;
+                            }
+                            if (piece_position_after_move & opponent_piece_position) != 0 {
+                                cloned_game_state.set_player_piece_position(
+                                    opponent_id,
+                                    opponent_piece_index,
+                                    0,
+                                );
+                                break;
+                            }
+                        }
+                    }
+
+                    cloned_game_state.re_clculate_player_pieces_bitmap();
+
+                    let piece_position_on_board_before_move = pre_calculated
                         .board_bit_values_to_cells
-                        .get(&piece_position)
+                        .get(&piece_position_before_move)
                         .unwrap();
 
-                    let piece_position_on_baord_after_move = get_piece_position_on_baord(
-                        &cloned_game_state,
-                        &pre_calculated,
-                        self.current_player_id,
-                        piece_index,
-                    );
+                    let piece_position_on_board_after_move = pre_calculated
+                        .board_bit_values_to_cells
+                        .get(&piece_position_after_move)
+                        .unwrap();
 
                     let command = card_id.to_string()
                         + &" "
-                        + &piece_position_on_baord_before_move
-                        + &piece_position_on_baord_after_move;
+                        + &piece_position_on_board_before_move
+                        + &piece_position_on_board_after_move;
 
                     let mut child_node = MinMaxNode::new(
                         self.depth + 1,
@@ -210,39 +306,10 @@ impl MinMaxNode {
                         cloned_game_state,
                     );
 
-                    child_node.build(&card_moves_map, &pre_calculated, MIN_MAX_TREE_DEPTH);
+                    child_node.build(&pre_calculated, MIN_MAX_TREE_DEPTH);
 
                     self.child_nodes.push(child_node);
                 }
-
-                /*
-
-                let mut cloned_game_state = self.game_state.clone();
-
-                apply_player_passing_to_game_state(
-                    &mut cloned_game_state,
-                    self.current_player_id,
-                    card_index,
-                );
-
-                let (card_id, card_rotation) =
-                    get_player_card(&self.game_state, self.current_player_id, card_index);
-
-                let command = card_id.to_string() + &" PASS";
-
-                let mut child_node = MinMaxNode::new(
-                    self.depth + 1,
-                    self.root_player_id,
-                    get_opponent_id(self.current_player_id),
-                    0,
-                    command,
-                    cloned_game_state,
-                );
-
-                child_node.build(&card_moves_map, &pre_calculated, MIN_MAX_TREE_DEPTH);
-
-                self.child_nodes.push(child_node);
-                */
             }
         }
     }
@@ -254,7 +321,7 @@ impl MinMaxNode {
         beta: i32,
         is_min_maxing_player: bool,
     ) -> i32 {
-        if depth == 0 || is_game_finished(&self.game_state) {
+        if depth == 0 || self.game_state.is_game_finished() {
             let score = get_game_score_for_maximizing_player(&self.game_state, self.root_player_id);
             self.score = score;
             return score;
@@ -262,8 +329,8 @@ impl MinMaxNode {
         if is_min_maxing_player {
             let mut max_eval = -100000000;
             let mut max_alpha = alpha;
-            for child_node in &self.child_nodes {
-                let node_eval = score_min_max_tree(&child_node, depth - 1, alpha, beta, false);
+            for child_node in self.child_nodes.iter_mut() {
+                let node_eval = child_node.score_min_max_tree(depth - 1, alpha, beta, false);
                 max_eval = cmp::max(max_eval, node_eval);
                 max_alpha = cmp::max(max_alpha, node_eval);
                 if beta <= max_alpha {
@@ -275,8 +342,8 @@ impl MinMaxNode {
         }
         let mut min_eval = 100000000;
         let mut min_beta = beta;
-        for child_node in &self.child_nodes {
-            let node_eval = score_min_max_tree(&child_node, depth - 1, alpha, min_beta, true);
+        for child_node in self.child_nodes.iter_mut() {
+            let node_eval = child_node.score_min_max_tree(depth - 1, alpha, min_beta, true);
             min_eval = cmp::min(min_eval, node_eval);
             min_beta = cmp::min(min_beta, node_eval);
             if min_beta <= alpha {
@@ -314,119 +381,11 @@ fn shift_position(position: i32, shift_by: i32) -> i32 {
     return position;
 }
 
-fn set_player_piece_position(
-    game_state: &mut GameState,
-    player_id: usize,
-    piece_index: usize,
-    new_position: i32,
-) {
-    game_state.player_states[player_id][piece_index] = new_position;
-}
-
-fn set_player_card(
-    game_state: &mut GameState,
-    player_id: usize,
-    card_index: usize,
-    card_id: i32,
-    card_rotation: i32,
-) {
-    let player_card_index = CARDS_OFFSET + card_index * 2;
-    game_state.player_states[player_id][player_card_index] = card_id;
-    game_state.player_states[player_id][player_card_index + 1] = card_rotation;
-}
-
-fn set_middle_card(game_state: &mut GameState, card_id: i32, card_rotation: i32) {
-    game_state.middle_card[0] = card_id;
-    game_state.middle_card[1] = card_rotation;
-}
-
-fn is_game_finished(game_state: &GameState) -> bool {
-    let white_wizard_position = game_state.player_states[WHITE_PLAYER_ID][WIZARD_INDEX];
-    let black_wizard_position = game_state.player_states[BLACK_PLAYER_ID][WIZARD_INDEX];
-
-    return (white_wizard_position == 0)
-        || ((white_wizard_position & BLACK_PLAYER_SHRINE_MASK) > 0)
-        || (black_wizard_position == 0)
-        || ((black_wizard_position & WHITE_PLAYER_SHRINE_MASK) > 0);
-}
-
-fn get_player_piece_position(game_state: &GameState, player_id: usize, piece_index: usize) -> i32 {
-    return game_state.player_states[player_id][piece_index];
-}
-
-fn get_player_card(game_state: &GameState, player_id: usize, card_index: usize) -> (i32, i32) {
-    let player_card_index = CARDS_OFFSET + card_index * 2;
-    return (
-        game_state.player_states[player_id][player_card_index],
-        game_state.player_states[player_id][player_card_index + 1],
-    );
-}
-
-fn get_middle_card(game_state: &GameState) -> (i32, i32) {
-    return (game_state.middle_card[0], game_state.middle_card[1]);
-}
-
 fn get_opponent_id(player_id: usize) -> usize {
     if player_id == WHITE_PLAYER_ID {
         return BLACK_PLAYER_ID;
     }
     return WHITE_PLAYER_ID;
-}
-
-fn get_piece_position_on_baord(
-    game_state: &GameState,
-    pre_calculated: &PreCalculated,
-    player_id: usize,
-    piece_index: usize,
-) -> String {
-    let piece_position = get_player_piece_position(&game_state, player_id, piece_index);
-    let boar_cell = pre_calculated
-        .board_bit_values_to_cells
-        .get(&piece_position)
-        .unwrap();
-    return boar_cell.to_string();
-}
-
-fn is_player_move_valid(
-    game_state: &GameState,
-    card_moves_map: &CardMovesMap,
-    pre_calculated: &PreCalculated,
-    player_id: usize,
-    piece_index: usize,
-    card_index: usize,
-    card_move_index: usize,
-) -> bool {
-    let (card_id, card_rotation) = get_player_card(&game_state, player_id, card_index);
-    let card_moves = card_moves_map.get(&card_id).unwrap();
-    let card_move = card_moves[card_move_index];
-    if card_move == 0 {
-        return false;
-    }
-    let piece_position_before_move = get_player_piece_position(&game_state, player_id, piece_index);
-    let shift_by = card_rotation * card_move;
-    let piece_valid_move_mask = pre_calculated
-        .valid_moves_from_position_masks
-        .get(&piece_position_before_move)
-        .unwrap();
-    let piece_position_after_move =
-        shift_position(piece_position_before_move, shift_by) & piece_valid_move_mask;
-    if piece_position_after_move == 0 {
-        return false;
-    }
-    for other_piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
-        if piece_index == other_piece_index {
-            continue;
-        }
-        let other_own_piece_position =
-            get_player_piece_position(&game_state, player_id, other_piece_index);
-        if other_own_piece_position == 0 {
-            continue;
-        }
-        if (piece_position_after_move & other_own_piece_position) > 0 {
-            return false;
-        }
-    }
-    return true;
 }
 
 fn get_game_score_for_maximizing_player(
@@ -441,14 +400,14 @@ fn get_game_score_for_maximizing_player(
 }
 
 fn get_game_state_score(game_state: &GameState) -> i32 {
-    let white_wizard_position = game_state.player_states[WHITE_PLAYER_ID][WIZARD_INDEX];
+    let white_wizard_position = game_state.players[WHITE_PLAYER_ID][WIZARD_INDEX];
     if white_wizard_position == 0 {
         return -100;
     }
     if (white_wizard_position & BLACK_PLAYER_SHRINE_MASK) > 0 {
         return 100;
     }
-    let black_wizard_position = game_state.player_states[BLACK_PLAYER_ID][WIZARD_INDEX];
+    let black_wizard_position = game_state.players[BLACK_PLAYER_ID][WIZARD_INDEX];
     if black_wizard_position == 0 {
         return 100;
     }
@@ -457,162 +416,33 @@ fn get_game_state_score(game_state: &GameState) -> i32 {
     }
     let mut num_of_white_pieces = 0;
     for piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
-        let piece_position = game_state.player_states[WHITE_PLAYER_ID][piece_index];
+        let piece_position = game_state.players[WHITE_PLAYER_ID][piece_index];
         if piece_position > 0 {
             num_of_white_pieces += 1;
         }
     }
     let mut num_of_black_pieces = 0;
     for piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
-        let piece_position = game_state.player_states[BLACK_PLAYER_ID][piece_index];
+        let piece_position = game_state.players[BLACK_PLAYER_ID][piece_index];
         if piece_position > 0 {
             num_of_black_pieces += 1;
         }
     }
     let white_piece_advantage = num_of_white_pieces - num_of_black_pieces;
-    return match white_piece_advantage {
-        4 => 80,
-        3 => 60,
-        2 => 40,
-        1 => 20,
-        0 => 0,
-        -1 => -10,
-        -2 => -20,
-        -3 => -30,
-        -4 => -40,
-        _ => 0,
-    };
-}
-
-fn apply_player_moving_piece_to_game_state(
-    game_state: &mut GameState,
-    card_moves_map: &CardMovesMap,
-    pre_calculated: &PreCalculated,
-    player_id: usize,
-    piece_index: usize,
-    card_index: usize,
-    card_move_index: usize,
-) {
-    let piece_position_before_move = get_player_piece_position(&game_state, player_id, piece_index);
-    let (card_id, card_rotation) = get_player_card(&game_state, player_id, card_index);
-    let card_moves = card_moves_map.get(&card_id).unwrap();
-    let card_move = card_moves[card_move_index];
-    let shift_by = card_rotation * card_move;
-    let piece_valid_move_mask = pre_calculated
-        .valid_moves_from_position_masks
-        .get(&piece_position_before_move)
-        .unwrap();
-    let piece_position_after_move =
-        shift_position(piece_position_before_move, shift_by) & piece_valid_move_mask;
-
-    set_player_piece_position(
-        game_state,
-        player_id,
-        piece_index,
-        piece_position_after_move,
-    );
-
-    let (middle_card_id, middle_card_rotation) = get_middle_card(&game_state);
-
-    set_player_card(
-        game_state,
-        player_id,
-        card_index,
-        middle_card_id,
-        middle_card_rotation,
-    );
-
-    set_middle_card(game_state, card_id, -1 * card_rotation);
-
-    let opponent_id = get_opponent_id(player_id);
-
-    for opponent_piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
-        let opponent_piece_position =
-            get_player_piece_position(&game_state, opponent_id, opponent_piece_index);
-        if opponent_piece_position == 0 {
-            continue;
-        }
-        if (piece_position_after_move & opponent_piece_position) != 0 {
-            set_player_piece_position(game_state, opponent_id, opponent_piece_index, 0);
-            return;
-        }
-    }
-}
-
-fn apply_player_passing_to_game_state(
-    game_state: &mut GameState,
-    player_id: usize,
-    card_index: usize,
-) {
-    let (card_id, card_rotation) = get_player_card(&game_state, player_id, card_index);
-
-    let (middle_card_id, middle_card_rotation) = get_middle_card(&game_state);
-
-    set_player_card(
-        game_state,
-        player_id,
-        card_index,
-        middle_card_id,
-        middle_card_rotation,
-    );
-
-    set_middle_card(game_state, card_id, -1 * card_rotation);
-}
-
-fn score_min_max_tree(
-    min_max_node: &MinMaxNode,
-    depth: usize,
-    alpha: i32,
-    beta: i32,
-    is_min_maxing_player: bool,
-) -> i32 {
-    if depth == 0 || is_game_finished(&min_max_node.game_state) {
-        let score = get_game_score_for_maximizing_player(
-            &min_max_node.game_state,
-            min_max_node.root_player_id,
-        );
-        return score;
-    }
-    if is_min_maxing_player {
-        let mut max_eval = -100000000;
-        let mut max_alpha = alpha;
-        for child_node in &min_max_node.child_nodes {
-            let node_eval = score_min_max_tree(&child_node, depth - 1, alpha, beta, false);
-            max_eval = cmp::max(max_eval, node_eval);
-            max_alpha = cmp::max(max_alpha, node_eval);
-            if beta <= max_alpha {
-                break;
-            }
-        }
-        return max_eval;
-    }
-
-    let mut min_eval = 100000000;
-    let mut min_beta = beta;
-    for child_node in &min_max_node.child_nodes {
-        let node_eval = score_min_max_tree(&child_node, depth - 1, alpha, min_beta, true);
-        min_eval = cmp::min(min_eval, node_eval);
-        min_beta = cmp::min(min_beta, node_eval);
-        if min_beta <= alpha {
-            break;
-        }
-    }
-    return min_eval;
+    return white_piece_advantage * 20;
 }
 
 fn main() {
+    let mut valid_moves_from_position_masks: HashMap<i32, i32> = HashMap::new();
     let mut pre_calculated: PreCalculated = PreCalculated {
-        valid_moves_from_position_masks: HashMap::new(),
         board_bit_values_to_cells: HashMap::new(),
-        is_move_valid_from_position_with_card: HashMap::new(),
+        positions_after_card_move_map: HashMap::new(),
+        positions_after_rotated_card_move_map: HashMap::new(),
     };
     for valid_moves_from_position_mask in VALID_MOVES_FROM_POSITION_MASKS.iter() {
         let [position, mask] = valid_moves_from_position_mask;
-        pre_calculated
-            .valid_moves_from_position_masks
-            .insert(*position, *mask);
+        valid_moves_from_position_masks.insert(*position, *mask);
     }
-
     for board_bit_value_to_cell in BOARD_BIT_VALUES_TO_CELLS.iter() {
         let (position, cell) = board_bit_value_to_cell;
         pre_calculated
@@ -627,7 +457,7 @@ fn main() {
     // game loop
     loop {
         let mut game_state: GameState = GameState {
-            player_states: [[0; 9]; 2],
+            players: [[0; 10]; 2],
             middle_card: [0; 2],
         };
         let mut card_moves_map: CardMovesMap = HashMap::new();
@@ -646,19 +476,33 @@ fn main() {
                 let piece_position = shift_position(1, coordinates_to_bitwise_shift(x, y));
                 match cell {
                     'W' => {
-                        game_state.player_states[WHITE_PLAYER_ID][WIZARD_INDEX] = piece_position;
+                        game_state.set_player_piece_position(
+                            WHITE_PLAYER_ID,
+                            WIZARD_INDEX,
+                            piece_position,
+                        );
                     }
                     'w' => {
-                        game_state.player_states[WHITE_PLAYER_ID]
-                            [STUDENTS_OFFSET + w_student_index] = piece_position;
+                        game_state.set_player_piece_position(
+                            WHITE_PLAYER_ID,
+                            STUDENTS_OFFSET + w_student_index,
+                            piece_position,
+                        );
                         w_student_index += 1;
                     }
                     'B' => {
-                        game_state.player_states[BLACK_PLAYER_ID][WIZARD_INDEX] = piece_position;
+                        game_state.set_player_piece_position(
+                            BLACK_PLAYER_ID,
+                            WIZARD_INDEX,
+                            piece_position,
+                        );
                     }
                     'b' => {
-                        game_state.player_states[BLACK_PLAYER_ID]
-                            [STUDENTS_OFFSET + b_student_index] = piece_position;
+                        game_state.set_player_piece_position(
+                            BLACK_PLAYER_ID,
+                            STUDENTS_OFFSET + b_student_index,
+                            piece_position,
+                        );
                         b_student_index += 1;
                     }
                     _ => {}
@@ -669,7 +513,9 @@ fn main() {
         let mut w_card_index: usize = 0;
         let mut b_card_index: usize = 0;
 
-        for _ in 0..5 as usize {
+        let mut card_ids: Vec<i32> = Vec::new();
+
+        for i in 0..5 as usize {
             let mut input_line = String::new();
             io::stdin().read_line(&mut input_line).unwrap();
             let inputs = input_line.split(" ").collect::<Vec<_>>();
@@ -684,6 +530,8 @@ fn main() {
             let dx_4 = parse_input!(inputs[8], i32);
             let dy_4 = parse_input!(inputs[9], i32);
 
+            card_ids.insert(i, card_id);
+
             let mut moves: [i32; 4] = [0; 4];
 
             moves[0] = coordinates_to_bitwise_shift(dx_1, dy_1);
@@ -694,26 +542,82 @@ fn main() {
 
             match owner {
                 0 => {
-                    let player_card_id_index = CARDS_OFFSET + w_card_index * 2;
-                    let player_card_rotation_index = player_card_id_index + 1;
-                    game_state.player_states[WHITE_PLAYER_ID][player_card_id_index] = card_id;
-                    game_state.player_states[WHITE_PLAYER_ID][player_card_rotation_index] =
-                        DEFAULT_CARD_ROTATION;
+                    game_state.set_player_card(
+                        WHITE_PLAYER_ID,
+                        w_card_index,
+                        card_id,
+                        DEFAULT_CARD_ROTATION,
+                    );
                     w_card_index += 1;
                 }
                 1 => {
-                    let player_card_id_index = CARDS_OFFSET + w_card_index * 2;
-                    let player_card_rotation_index = player_card_id_index + 1;
-                    game_state.player_states[BLACK_PLAYER_ID][player_card_id_index] = card_id;
-                    game_state.player_states[BLACK_PLAYER_ID][player_card_rotation_index] =
-                        DEFAULT_CARD_ROTATION;
+                    game_state.set_player_card(
+                        BLACK_PLAYER_ID,
+                        b_card_index,
+                        card_id,
+                        DEFAULT_CARD_ROTATION,
+                    );
                     b_card_index += 1;
                 }
                 -1 => {
-                    game_state.middle_card[0] = card_id;
-                    game_state.middle_card[1] = DEFAULT_CARD_ROTATION;
+                    game_state.set_middle_card(card_id, DEFAULT_CARD_ROTATION);
                 }
                 _ => {}
+            }
+        }
+        for y in 0..5 {
+            for x in 0..5 {
+                let piece_position_before_move =
+                    shift_position(1, coordinates_to_bitwise_shift(x, y));
+                let piece_valid_move_mask = valid_moves_from_position_masks
+                    .get(&piece_position_before_move)
+                    .unwrap();
+                let mut card_moves_map_for_position = HashMap::new();
+                for card_id in card_ids.clone() {
+                    let mut card_moves: Vec<i32> = Vec::new();
+                    for card_move_index in 0..NUM_OF_MOVES_PER_CARD {
+                        let shift_by = 1 * (card_moves_map.get(&card_id).unwrap()[card_move_index]);
+                        if shift_by == 0 {
+                            continue;
+                        }
+                        let piece_position_after_move =
+                            shift_position(piece_position_before_move, shift_by)
+                                & piece_valid_move_mask;
+                        if piece_position_after_move == 0 {
+                            continue;
+                        }
+                        card_moves.push(piece_position_after_move);
+                    }
+                    card_moves_map_for_position.insert(card_id, card_moves);
+                }
+                pre_calculated
+                    .positions_after_card_move_map
+                    .insert(piece_position_before_move, card_moves_map_for_position);
+
+                let mut card_moves_map_for_position_rotated = HashMap::new();
+
+                for card_id in card_ids.clone() {
+                    let mut card_moves: Vec<i32> = Vec::new();
+                    for card_move_index in 0..NUM_OF_MOVES_PER_CARD {
+                        let shift_by =
+                            -1 * (card_moves_map.get(&card_id).unwrap()[card_move_index]);
+                        if shift_by == 0 {
+                            continue;
+                        }
+                        let piece_position_after_move =
+                            shift_position(piece_position_before_move, shift_by)
+                                & piece_valid_move_mask;
+                        if piece_position_after_move == 0 {
+                            continue;
+                        }
+                        card_moves.push(piece_position_after_move);
+                    }
+                    card_moves_map_for_position_rotated.insert(card_id, card_moves);
+                }
+                pre_calculated.positions_after_rotated_card_move_map.insert(
+                    piece_position_before_move,
+                    card_moves_map_for_position_rotated,
+                );
             }
         }
 
@@ -728,6 +632,8 @@ fn main() {
             let _move = inputs[1].trim().to_string();
         }
 
+        game_state.re_clculate_player_pieces_bitmap();
+
         let mut root_node = MinMaxNode::new(
             0,
             root_player_id,
@@ -736,19 +642,9 @@ fn main() {
             "".to_string(),
             game_state,
         );
-        root_node.build(&card_moves_map, &pre_calculated, MIN_MAX_TREE_DEPTH);
+        root_node.build(&pre_calculated, MIN_MAX_TREE_DEPTH);
         root_node.score_min_max_tree(MIN_MAX_TREE_DEPTH, -100000000, 100000000, true);
         let command = root_node.get_next_command();
         println!("{}", command);
     }
 }
-/*
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
-*/
