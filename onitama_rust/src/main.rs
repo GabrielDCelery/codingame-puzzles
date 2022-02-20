@@ -225,6 +225,15 @@ fn set_middle_card(game_state: &mut GameState, card_id: i32, card_rotation: i32)
     game_state[middle_card_rotation_index] = card_rotation;
 }
 
+fn is_player_moving_on_own_piece(
+    game_state: &GameState,
+    player_id: usize,
+    player_move: i32,
+) -> bool {
+    let own_pieces_bitmap = get_player_pieces_bitmask(game_state, player_id);
+    return (player_move & own_pieces_bitmap) > 0;
+}
+
 fn re_clculate_player_pieces_bitmap(game_state: &mut GameState) {
     for player_id in 0..NUM_OF_PLAYERS {
         let mut bitmask = 0;
@@ -232,6 +241,29 @@ fn re_clculate_player_pieces_bitmap(game_state: &mut GameState) {
             bitmask = bitmask | get_player_piece_position(game_state, player_id, piece_index);
         }
         set_player_pieces_bitmask(game_state, player_id, bitmask);
+    }
+}
+
+fn apply_player_move_to_opponent_pieces(
+    game_state: &mut GameState,
+    player_id: usize,
+    player_move: i32,
+) {
+    let opponent_id = get_opponent_id(player_id);
+    let opponent_pieces_bitmap = get_player_pieces_bitmask(game_state, opponent_id);
+
+    if (player_move & opponent_pieces_bitmap) == 0 {
+        return;
+    }
+
+    for opponent_piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
+        let opponent_piece_position =
+            get_player_piece_position(game_state, opponent_id, opponent_piece_index);
+        if (player_move & opponent_piece_position) == 0 {
+            continue;
+        }
+        set_player_piece_position(game_state, opponent_id, opponent_piece_index, 0);
+        return;
     }
 }
 
@@ -430,10 +462,12 @@ fn build_min_max_tree(node: &mut MinMaxNode, pre_calculated: &PreCalculated, tar
 
             for piece_position_after_move_ in piece_positions_after_move.iter() {
                 let piece_position_after_move = *piece_position_after_move_;
-                let own_pieces_bitmap =
-                    get_player_pieces_bitmask(&node.game_state, node.current_player_id);
-                let is_moving_on_own_piece = (piece_position_after_move & own_pieces_bitmap) > 0;
-                if is_moving_on_own_piece {
+
+                if is_player_moving_on_own_piece(
+                    &node.game_state,
+                    node.current_player_id,
+                    piece_position_after_move,
+                ) {
                     continue;
                 }
 
@@ -454,33 +488,12 @@ fn build_min_max_tree(node: &mut MinMaxNode, pre_calculated: &PreCalculated, tar
                     middle_card_rotation,
                 );
                 set_middle_card(&mut cloned_game_state, card_id, -1 * card_rotation);
-                let opponent_id = get_opponent_id(node.current_player_id);
-                let opponent_pieces_bitmap =
-                    get_player_pieces_bitmask(&node.game_state, opponent_id);
 
-                let is_capturing_opponent_piece =
-                    (piece_position_after_move & opponent_pieces_bitmap) > 0;
-                if is_capturing_opponent_piece {
-                    for opponent_piece_index in 0..NUM_OF_PIECES_PER_PLAYER {
-                        let opponent_piece_position = get_player_piece_position(
-                            &node.game_state,
-                            opponent_id,
-                            opponent_piece_index,
-                        );
-                        if opponent_piece_position == 0 {
-                            continue;
-                        }
-                        if (piece_position_after_move & opponent_piece_position) != 0 {
-                            set_player_piece_position(
-                                &mut cloned_game_state,
-                                opponent_id,
-                                opponent_piece_index,
-                                0,
-                            );
-                            break;
-                        }
-                    }
-                }
+                apply_player_move_to_opponent_pieces(
+                    &mut cloned_game_state,
+                    node.current_player_id,
+                    piece_position_after_move,
+                );
 
                 re_clculate_player_pieces_bitmap(&mut cloned_game_state);
 
