@@ -438,7 +438,12 @@ fn get_num_of_estimated_moves_for_player(
     return num_of_possible_moves;
 }
 
-fn build_min_max_tree(node: &mut MinMaxNode, pre_calculated: &PreCalculated, target_depth: usize) {
+fn build_min_max_tree(
+    node: &mut MinMaxNode,
+    pre_calculated: &PreCalculated,
+    target_depth: usize,
+    num_of_nodes: &mut usize,
+) {
     if node.depth == target_depth || is_game_finished(&node.game_state) {
         return;
     }
@@ -520,7 +525,9 @@ fn build_min_max_tree(node: &mut MinMaxNode, pre_calculated: &PreCalculated, tar
                     cloned_game_state,
                 );
 
-                build_min_max_tree(&mut child_node, &pre_calculated, target_depth);
+                *num_of_nodes += 1;
+
+                build_min_max_tree(&mut child_node, &pre_calculated, target_depth, num_of_nodes);
 
                 node.child_nodes.push(child_node);
             }
@@ -820,7 +827,16 @@ fn main() {
             target_depth = 6;
         }
 
-        build_min_max_tree(&mut root_node, &pre_calculated, target_depth);
+        let mut num_of_nodes: usize = 0;
+
+        build_min_max_tree(
+            &mut root_node,
+            &pre_calculated,
+            target_depth,
+            &mut num_of_nodes,
+        );
+
+        eprintln!("{}", num_of_nodes);
 
         score_min_max_tree(
             &mut root_node,
@@ -835,13 +851,8 @@ fn main() {
         let duration = start.elapsed().as_millis();
 
         println!(
-            "{} s: {}, d: {}, wm: {}, bm: {}, {}ms",
-            command,
-            score,
-            target_depth,
-            num_of_possible_moves_for_white,
-            num_of_possible_moves_for_black,
-            duration
+            "{} s: {}, d: {}, n: {}, {}ms",
+            command, score, target_depth, num_of_nodes, duration
         );
     }
 }
