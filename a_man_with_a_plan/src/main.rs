@@ -19,15 +19,15 @@ enum Terrain {
 }
 
 impl Terrain {
-    fn convert_str_to_enum(string: &str) -> Result<Terrain, ()> {
+    fn convert_str_to_enum(string: &str) -> Terrain {
         return match string {
-            "G" => Ok(Terrain::Grassland),
-            "W" => Ok(Terrain::Water),
-            "M" => Ok(Terrain::Mountain),
-            "S" => Ok(Terrain::Swamp),
-            "R" => Ok(Terrain::Ravine),
-            "I" => Ok(Terrain::PointOfInterest),
-            _ => Err(()),
+            "G" => Terrain::Grassland,
+            "W" => Terrain::Water,
+            "M" => Terrain::Mountain,
+            "S" => Terrain::Swamp,
+            "R" => Terrain::Ravine,
+            "I" => Terrain::PointOfInterest,
+            _ => {}
         };
     }
 }
