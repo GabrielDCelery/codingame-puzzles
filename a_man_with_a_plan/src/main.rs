@@ -27,7 +27,7 @@ impl Terrain {
             "S" => Terrain::Swamp,
             "R" => Terrain::Ravine,
             "I" => Terrain::PointOfInterest,
-            _ => {}
+            _ => Err(()),
         };
     }
 }
