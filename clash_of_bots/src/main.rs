@@ -6,6 +6,38 @@ macro_rules! parse_input {
     };
 }
 
+enum Direction {
+    UP,
+    DOWN,
+    LEFT,
+    RIGHT,
+}
+
+impl Direction {
+    fn enum_to_str(&self) -> &'static str {
+        match self {
+            Direction::UP => "UP",
+            Direction::DOWN => "DOWN",
+            Direction::LEFT => "LEFT",
+            Direction::RIGHT => "RIGHT",
+        }
+    }
+
+    fn coordinates_to_enum(x: i8, y: i8) -> Direction {}
+}
+
+trait Criterion {
+    fn is_true(&self, robot: &Robot) -> bool;
+}
+
+struct HasEnemyNextToMe {}
+
+impl Criterion for HasEnemyNextToMe {
+    fn is_true(&self, robot: &Robot) -> bool {
+        return robot.id == 0;
+    }
+}
+
 #[derive(Debug)]
 struct Robot {
     id: usize,
@@ -27,6 +59,10 @@ impl Robot {
     fn set_local_area_cell(&mut self, x: usize, y: usize, value: i8) {
         self.local_area[y][x] = value;
     }
+
+    fn get_health(&self) -> i8 {
+        return self.local_area[2][2];
+    }
 }
 
 /**
@@ -47,11 +83,12 @@ fn main() {
             for j in 0..5 as usize {
                 let mut inputs = String::new();
                 io::stdin().read_line(&mut inputs).unwrap();
-                let y: usize = 5 - j;
+                let x: usize = j;
+                let mut y: usize = 0;
                 for k in inputs.split_whitespace() {
-                    let x: usize = k.parse().unwrap();
                     let cell = parse_input!(k, i8);
                     robot.set_local_area_cell(y, x, cell);
+                    y += 1;
                 }
             }
             eprintln!("{:?}", robot);
