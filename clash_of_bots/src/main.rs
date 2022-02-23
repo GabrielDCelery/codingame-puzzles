@@ -19,13 +19,12 @@ impl Coordinates {
         return Coordinates { x, y };
     }
 
-    fn add_vector(&mut self, vector: &Vector) {
-        self.x += vector.x;
-        self.y += vector.y;
+    fn add_vector(&self, vector: &Vector) -> Coordinates {
+        return Coordinates::new(self.x + vector.x, self.y + vector.y);
     }
 
-    fn get_manhattan_distance(&self, other: &Coordinates) -> i8 {
-        return (other.x - self.x).abs() + (other.y - self.y).abs();
+    fn manhattan_distance_from(&self, other: &Coordinates) -> i8 {
+        return (other.x.abs() - self.x.abs()).abs() + (other.y.abs() - self.y.abs()).abs();
     }
 }
 
@@ -36,6 +35,10 @@ struct Vector {
 }
 
 impl Vector {
+    fn new(x: i8, y: i8) -> Vector {
+        return Vector { x, y };
+    }
+
     fn to_enum(&self) -> Direction {
         return match self {
             Vector { x: 0, y: -1 } => Direction::UP,
@@ -47,19 +50,28 @@ impl Vector {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+enum Command {
+    MOVE,
+    ATTACK,
+}
+
+impl Command {
+    fn to_str(&self) -> &'static str {
+        return match self {
+            Command::MOVE => "MOVE",
+            Command::ATTACK => "ATTACK",
+        };
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
 enum Direction {
     UP,
     DOWN,
     LEFT,
     RIGHT,
 }
-
-static DIRECTIONS: [Direction; 4] = [
-    Direction::UP,
-    Direction::DOWN,
-    Direction::LEFT,
-    Direction::RIGHT,
-];
 
 impl Direction {
     fn to_str(&self) -> &'static str {
@@ -82,6 +94,12 @@ impl Direction {
     }
 
     fn iterator() -> Iter<'static, Direction> {
+        static DIRECTIONS: [Direction; 4] = [
+            Direction::UP,
+            Direction::LEFT,
+            Direction::DOWN,
+            Direction::RIGHT,
+        ];
         return DIRECTIONS.iter();
     }
 }
@@ -93,6 +111,11 @@ struct Robot {
     health: i8,
     coordinates: Coordinates,
 }
+
+static UPPER_AREA: [[i8; 2]; 6] = [[-1, -2], [-1, -1], [0, -2], [0, -1], [1, -2], [1, -1]];
+static LEFT_AREA: [[i8; 2]; 6] = [[-2, -1], [-1, -1], [-2, 0], [-1, 0], [-2, 1], [-1, 1]];
+static DOWN_AREA: [[i8; 2]; 6] = [[-1, 2], [-1, 1], [0, 2], [0, 1], [1, 2], [1, 1]];
+static RIGHT_AREA: [[i8; 2]; 6] = [[2, -1], [1, -1], [2, 0], [1, 0], [2, 1], [1, 1]];
 
 #[derive(Debug)]
 struct LocalArea {
@@ -142,6 +165,7 @@ impl LocalArea {
 enum ConditionName {
     DefaultTrue,
     AmIAlone,
+    HasOneEnemyNextToMe,
 }
 
 trait Condition {
@@ -171,8 +195,29 @@ impl Condition for AmIAlone {
     }
 }
 
+struct HasOneEnemyNextToMe {}
+
+impl Condition for HasOneEnemyNextToMe {
+    fn is_true(&self, local_area: &LocalArea) -> bool {
+        let robot_coordinates = Coordinates::new(2, 2);
+        let mut num_of_enemies_next_to_me: u8 = 0;
+        for direction in Direction::iterator() {
+            let vector = direction.to_vector();
+            let neighbouring_cell = robot_coordinates.add_vector(&vector);
+            if local_area.is_enemy_at_coords(&neighbouring_cell) {
+                num_of_enemies_next_to_me += 1;
+            }
+        }
+        if num_of_enemies_next_to_me == 1 {
+            return true;
+        }
+        return false;
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
 enum ActionName {
+    AttackEnemy,
     SeekFriends,
     GuardMySelf,
 }
@@ -186,8 +231,48 @@ type ActionDictionary = HashMap<ActionName, Box<dyn Action>>;
 struct SeekFriends {}
 
 impl Action for SeekFriends {
-    fn get_command(&self, _: &LocalArea) -> String {
-        return "MOVE UP".to_string();
+    fn get_command(&self, local_area: &LocalArea) -> String {
+        let mut num_of_enemies_at_chosen_direction: u8 = 100;
+        let mut chosen_direction: Direction = Direction::UP;
+        let robot_coordinates = Coordinates::new(2, 2);
+        for direction in Direction::iterator() {
+            let area = match direction {
+                Direction::UP => &UPPER_AREA,
+                Direction::LEFT => &LEFT_AREA,
+                Direction::DOWN => &DOWN_AREA,
+                Direction::RIGHT => &RIGHT_AREA,
+            };
+            let mut num_of_enemies: u8 = 0;
+            for relative_coordinates_ in area.iter() {
+                let [x, y] = *relative_coordinates_;
+                let vector = Vector::new(x, y);
+                let cell_being_scanned = robot_coordinates.add_vector(&vector);
+                if local_area.is_enemy_at_coords(&cell_being_scanned) {
+                    num_of_enemies += 1;
+                };
+            }
+            if num_of_enemies < num_of_enemies_at_chosen_direction {
+                num_of_enemies_at_chosen_direction = num_of_enemies;
+                chosen_direction = direction.clone();
+            }
+        }
+        return Command::MOVE.to_str().to_string() + " " + chosen_direction.to_str();
+    }
+}
+
+struct AttackEnemy {}
+
+impl Action for AttackEnemy {
+    fn get_command(&self, local_area: &LocalArea) -> String {
+        let robot_coordinates = Coordinates::new(2, 2);
+        for direction in Direction::iterator() {
+            let vector = direction.to_vector();
+            let neighbouring_cell = robot_coordinates.add_vector(&vector);
+            if local_area.is_enemy_at_coords(&neighbouring_cell) {
+                return Command::ATTACK.to_str().to_string() + " " + direction.to_str();
+            }
+        }
+        panic!("Could not find target for AttackEnemy");
     }
 }
 
@@ -253,22 +338,27 @@ impl GameAI<'_> {
     }
 }
 
-/**
- * Auto-generated code below aims at helping you parse
- * the standard input according to the problem statement.
- **/
 fn main() {
     let mut condition_dictionary: ConditionDictionary = HashMap::new();
 
+    condition_dictionary.insert(
+        ConditionName::HasOneEnemyNextToMe,
+        Box::new(HasOneEnemyNextToMe {}),
+    );
     condition_dictionary.insert(ConditionName::AmIAlone, Box::new(AmIAlone {}));
     condition_dictionary.insert(ConditionName::DefaultTrue, Box::new(DefaultTrue {}));
 
     let mut action_dictionary: ActionDictionary = HashMap::new();
 
+    action_dictionary.insert(ActionName::AttackEnemy, Box::new(AttackEnemy {}));
     action_dictionary.insert(ActionName::SeekFriends, Box::new(SeekFriends {}));
     action_dictionary.insert(ActionName::GuardMySelf, Box::new(GuardMySelf {}));
 
     let action_configurations: Vec<ActionConfiguration> = vec![
+        ActionConfiguration::new(
+            ActionName::AttackEnemy,
+            vec![ConditionName::HasOneEnemyNextToMe],
+        ),
         ActionConfiguration::new(ActionName::SeekFriends, vec![ConditionName::AmIAlone]),
         ActionConfiguration::new(ActionName::GuardMySelf, vec![ConditionName::DefaultTrue]),
     ];
@@ -301,6 +391,7 @@ fn main() {
                     x += 1;
                 }
             }
+
             local_area_list.insert(local_area.id, local_area);
         }
 
