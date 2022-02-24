@@ -188,7 +188,7 @@ enum ConditionName {
     AmIInDanger,
     DefaultTrue,
     HasEnemyNextToMe,
-    WouldSelfDestructDamageOpponentMore,
+    WouldSelfDestructWorthIt,
 }
 
 trait Condition {
@@ -225,14 +225,13 @@ impl Condition for AmIInDanger {
     }
 }
 
-struct WouldSelfDestructDamageOpponentMore {}
+struct WouldSelfDestructWorthIt {}
 
-impl Condition for WouldSelfDestructDamageOpponentMore {
+impl Condition for WouldSelfDestructWorthIt {
     fn is_true(&self, local_area: &LocalArea) -> bool {
         let robot_coordinates = Coordinates::new(2, 2);
         let mut damage_caused_to_enemy: i8 = 0;
-        let mut damage_caused_to_own: i8 =
-            local_area.get_robot_health_at_coords(&robot_coordinates);
+        let mut damage_caused_to_own: i8 = 1;
         for relative_coordinates_ in IMMEDIATE_VICINITY_AREA.iter() {
             let [x, y] = *relative_coordinates_;
             let vector = Vector::new(x, y);
@@ -242,14 +241,12 @@ impl Condition for WouldSelfDestructDamageOpponentMore {
                 continue;
             }
             let is_enemy = robot_health_at_coords < 0;
-            let mut damage_caused = 4;
-            if robot_health_at_coords.abs() < 4 {
-                damage_caused = robot_health_at_coords.abs();
-            }
-            if is_enemy {
-                damage_caused_to_enemy += damage_caused;
-            } else {
-                damage_caused_to_own += damage_caused;
+            if robot_health_at_coords.abs() <= 4 {
+                if is_enemy {
+                    damage_caused_to_enemy += 1;
+                } else {
+                    damage_caused_to_own += 1;
+                }
             }
         }
         return damage_caused_to_enemy > damage_caused_to_own;
@@ -454,8 +451,8 @@ fn main() {
     condition_dictionary.insert(ConditionName::DefaultTrue, Box::new(DefaultTrue {}));
     condition_dictionary.insert(ConditionName::AmIInDanger, Box::new(AmIInDanger {}));
     condition_dictionary.insert(
-        ConditionName::WouldSelfDestructDamageOpponentMore,
-        Box::new(WouldSelfDestructDamageOpponentMore {}),
+        ConditionName::WouldSelfDestructWorthIt,
+        Box::new(WouldSelfDestructWorthIt {}),
     );
 
     let mut action_dictionary: ActionDictionary = HashMap::new();
@@ -471,7 +468,7 @@ fn main() {
             ActionName::SelfDestruct,
             vec![
                 ConditionName::AmIInDanger,
-                ConditionName::WouldSelfDestructDamageOpponentMore,
+                ConditionName::WouldSelfDestructWorthIt,
             ],
         ),
         ActionConfiguration::new(ActionName::Escape, vec![ConditionName::AmIInDanger]),
