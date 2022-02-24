@@ -54,6 +54,8 @@ impl Vector {
 enum Command {
     MOVE,
     ATTACK,
+    GUARD,
+    SELFDESTRUCTION,
 }
 
 impl Command {
@@ -61,6 +63,8 @@ impl Command {
         return match self {
             Command::MOVE => "MOVE",
             Command::ATTACK => "ATTACK",
+            Command::GUARD => "GUARD",
+            Command::SELFDESTRUCTION => "SELFDESTRUCTION",
         };
     }
 }
@@ -112,10 +116,23 @@ struct Robot {
     coordinates: Coordinates,
 }
 
-static UPPER_AREA: [[i8; 2]; 6] = [[-1, -2], [-1, -1], [0, -2], [0, -1], [1, -2], [1, -1]];
-static LEFT_AREA: [[i8; 2]; 6] = [[-2, -1], [-1, -1], [-2, 0], [-1, 0], [-2, 1], [-1, 1]];
-static DOWN_AREA: [[i8; 2]; 6] = [[-1, 2], [-1, 1], [0, 2], [0, 1], [1, 2], [1, 1]];
-static RIGHT_AREA: [[i8; 2]; 6] = [[2, -1], [1, -1], [2, 0], [1, 0], [2, 1], [1, 1]];
+static UPPER_SCANFORWARD_AREA: [[i8; 2]; 6] =
+    [[-1, -2], [-1, -1], [0, -2], [0, -1], [1, -2], [1, -1]];
+static LEFT_SCANFORWARD_AREA: [[i8; 2]; 6] =
+    [[-2, -1], [-1, -1], [-2, 0], [-1, 0], [-2, 1], [-1, 1]];
+static DOWN_SCANFORWARD_AREA: [[i8; 2]; 6] = [[-1, 2], [-1, 1], [0, 2], [0, 1], [1, 2], [1, 1]];
+static RIGHT_SCANFORWARD_AREA: [[i8; 2]; 6] = [[2, -1], [1, -1], [2, 0], [1, 0], [2, 1], [1, 1]];
+
+static IMMEDIATE_VICINITY_AREA: [[i8; 2]; 8] = [
+    [-1, -1],
+    [0, -1],
+    [1, -1],
+    [-1, 0],
+    [1, 0],
+    [-1, 1],
+    [0, 1],
+    [1, 1],
+];
 
 #[derive(Debug)]
 struct LocalArea {
@@ -159,13 +176,19 @@ impl LocalArea {
     fn is_enemy_at_coords(&self, coordinates: &Coordinates) -> bool {
         return self.get_robot_health_at_coords(coordinates) < 0;
     }
+
+    fn is_friendly_at_coords(&self, coordinates: &Coordinates) -> bool {
+        return self.get_robot_health_at_coords(coordinates) > 0;
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 enum ConditionName {
-    DefaultTrue,
     AmIAlone,
-    HasOneEnemyNextToMe,
+    AmIInDanger,
+    DefaultTrue,
+    HasEnemyNextToMe,
+    WouldSelfDestructDamageOpponentMore,
 }
 
 trait Condition {
@@ -182,6 +205,57 @@ impl Condition for DefaultTrue {
     }
 }
 
+struct AmIInDanger {}
+
+impl Condition for AmIInDanger {
+    fn is_true(&self, local_area: &LocalArea) -> bool {
+        let robot_coordinates = Coordinates::new(2, 2);
+        let mut num_of_enemies_next_to_me: u8 = 0;
+        for direction in Direction::iterator() {
+            let vector = direction.to_vector();
+            let neighbouring_cell = robot_coordinates.add_vector(&vector);
+            if local_area.is_enemy_at_coords(&neighbouring_cell) {
+                num_of_enemies_next_to_me += 1;
+            }
+        }
+        if num_of_enemies_next_to_me >= 2 {
+            return true;
+        }
+        return false;
+    }
+}
+
+struct WouldSelfDestructDamageOpponentMore {}
+
+impl Condition for WouldSelfDestructDamageOpponentMore {
+    fn is_true(&self, local_area: &LocalArea) -> bool {
+        let robot_coordinates = Coordinates::new(2, 2);
+        let mut damage_caused_to_enemy: i8 = 0;
+        let mut damage_caused_to_own: i8 =
+            local_area.get_robot_health_at_coords(&robot_coordinates);
+        for relative_coordinates_ in IMMEDIATE_VICINITY_AREA.iter() {
+            let [x, y] = *relative_coordinates_;
+            let vector = Vector::new(x, y);
+            let cell_being_scanned = robot_coordinates.add_vector(&vector);
+            let robot_health_at_coords = local_area.get_robot_health_at_coords(&cell_being_scanned);
+            if robot_health_at_coords == 0 {
+                continue;
+            }
+            let is_enemy = robot_health_at_coords < 0;
+            let mut damage_caused = 4;
+            if robot_health_at_coords.abs() < 4 {
+                damage_caused = robot_health_at_coords.abs();
+            }
+            if is_enemy {
+                damage_caused_to_enemy += damage_caused;
+            } else {
+                damage_caused_to_own += damage_caused;
+            }
+        }
+        return damage_caused_to_enemy > damage_caused_to_own;
+    }
+}
+
 struct AmIAlone {}
 
 impl Condition for AmIAlone {
@@ -195,21 +269,17 @@ impl Condition for AmIAlone {
     }
 }
 
-struct HasOneEnemyNextToMe {}
+struct HasEnemyNextToMe {}
 
-impl Condition for HasOneEnemyNextToMe {
+impl Condition for HasEnemyNextToMe {
     fn is_true(&self, local_area: &LocalArea) -> bool {
         let robot_coordinates = Coordinates::new(2, 2);
-        let mut num_of_enemies_next_to_me: u8 = 0;
         for direction in Direction::iterator() {
             let vector = direction.to_vector();
             let neighbouring_cell = robot_coordinates.add_vector(&vector);
             if local_area.is_enemy_at_coords(&neighbouring_cell) {
-                num_of_enemies_next_to_me += 1;
+                return true;
             }
-        }
-        if num_of_enemies_next_to_me == 1 {
-            return true;
         }
         return false;
     }
@@ -220,6 +290,8 @@ enum ActionName {
     AttackEnemy,
     SeekFriends,
     GuardMySelf,
+    Escape,
+    SelfDestruct,
 }
 
 trait Action {
@@ -233,14 +305,18 @@ struct SeekFriends {}
 impl Action for SeekFriends {
     fn get_command(&self, local_area: &LocalArea) -> String {
         let mut num_of_enemies_at_chosen_direction: u8 = 100;
-        let mut chosen_direction: Direction = Direction::UP;
+        let mut chosen_direction: Option<Direction> = None;
         let robot_coordinates = Coordinates::new(2, 2);
         for direction in Direction::iterator() {
+            let would_move_to = robot_coordinates.add_vector(&direction.to_vector());
+            if local_area.is_friendly_at_coords(&would_move_to) {
+                continue;
+            }
             let area = match direction {
-                Direction::UP => &UPPER_AREA,
-                Direction::LEFT => &LEFT_AREA,
-                Direction::DOWN => &DOWN_AREA,
-                Direction::RIGHT => &RIGHT_AREA,
+                Direction::UP => &UPPER_SCANFORWARD_AREA,
+                Direction::LEFT => &LEFT_SCANFORWARD_AREA,
+                Direction::DOWN => &DOWN_SCANFORWARD_AREA,
+                Direction::RIGHT => &RIGHT_SCANFORWARD_AREA,
             };
             let mut num_of_enemies: u8 = 0;
             for relative_coordinates_ in area.iter() {
@@ -253,10 +329,31 @@ impl Action for SeekFriends {
             }
             if num_of_enemies < num_of_enemies_at_chosen_direction {
                 num_of_enemies_at_chosen_direction = num_of_enemies;
-                chosen_direction = direction.clone();
+                chosen_direction = Some(direction.clone());
             }
         }
-        return Command::MOVE.to_str().to_string() + " " + chosen_direction.to_str();
+        if chosen_direction.is_none() {
+            return Command::GUARD.to_str().to_string();
+        }
+        return Command::MOVE.to_str().to_string() + " " + chosen_direction.unwrap().to_str();
+    }
+}
+
+struct Escape {}
+
+impl Action for Escape {
+    fn get_command(&self, local_area: &LocalArea) -> String {
+        let robot_coordinates = Coordinates::new(2, 2);
+        for direction in Direction::iterator() {
+            let vector = direction.to_vector();
+            let neighbouring_cell = robot_coordinates.add_vector(&vector);
+            if !local_area.is_enemy_at_coords(&neighbouring_cell)
+                && !local_area.is_friendly_at_coords(&neighbouring_cell)
+            {
+                return Command::MOVE.to_str().to_string() + " " + direction.to_str();
+            }
+        }
+        return Command::SELFDESTRUCTION.to_str().to_string();
     }
 }
 
@@ -280,7 +377,15 @@ struct GuardMySelf {}
 
 impl Action for GuardMySelf {
     fn get_command(&self, _: &LocalArea) -> String {
-        return "GUARD".to_string();
+        return Command::GUARD.to_str().to_string();
+    }
+}
+
+struct SelfDestruct {}
+
+impl Action for SelfDestruct {
+    fn get_command(&self, _: &LocalArea) -> String {
+        return Command::SELFDESTRUCTION.to_str().to_string();
     }
 }
 
@@ -342,22 +447,37 @@ fn main() {
     let mut condition_dictionary: ConditionDictionary = HashMap::new();
 
     condition_dictionary.insert(
-        ConditionName::HasOneEnemyNextToMe,
-        Box::new(HasOneEnemyNextToMe {}),
+        ConditionName::HasEnemyNextToMe,
+        Box::new(HasEnemyNextToMe {}),
     );
     condition_dictionary.insert(ConditionName::AmIAlone, Box::new(AmIAlone {}));
     condition_dictionary.insert(ConditionName::DefaultTrue, Box::new(DefaultTrue {}));
+    condition_dictionary.insert(ConditionName::AmIInDanger, Box::new(AmIInDanger {}));
+    condition_dictionary.insert(
+        ConditionName::WouldSelfDestructDamageOpponentMore,
+        Box::new(WouldSelfDestructDamageOpponentMore {}),
+    );
 
     let mut action_dictionary: ActionDictionary = HashMap::new();
 
     action_dictionary.insert(ActionName::AttackEnemy, Box::new(AttackEnemy {}));
     action_dictionary.insert(ActionName::SeekFriends, Box::new(SeekFriends {}));
     action_dictionary.insert(ActionName::GuardMySelf, Box::new(GuardMySelf {}));
+    action_dictionary.insert(ActionName::Escape, Box::new(Escape {}));
+    action_dictionary.insert(ActionName::SelfDestruct, Box::new(SelfDestruct {}));
 
     let action_configurations: Vec<ActionConfiguration> = vec![
         ActionConfiguration::new(
+            ActionName::SelfDestruct,
+            vec![
+                ConditionName::AmIInDanger,
+                ConditionName::WouldSelfDestructDamageOpponentMore,
+            ],
+        ),
+        ActionConfiguration::new(ActionName::Escape, vec![ConditionName::AmIInDanger]),
+        ActionConfiguration::new(
             ActionName::AttackEnemy,
-            vec![ConditionName::HasOneEnemyNextToMe],
+            vec![ConditionName::HasEnemyNextToMe],
         ),
         ActionConfiguration::new(ActionName::SeekFriends, vec![ConditionName::AmIAlone]),
         ActionConfiguration::new(ActionName::GuardMySelf, vec![ConditionName::DefaultTrue]),
